@@ -1,7 +1,7 @@
 import math
 import mindspore as ms
 from mindspore import nn, ops ,Parameter
-from mindspore.common.initializer import initializer
+from mindspore.common.initializer import initializer,Uniform
 
 from module import commons
 from module import modules
@@ -11,11 +11,13 @@ from mindspore.nn import Conv1d, Conv2d
 from mindspore.nn import  Conv1dTranspose as ConvTranspose1d
 #from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
 from mindnlp.modules.functional.weight_norm import remove_weight_norm, weight_norm
+from mindnlp.amp import autocast
+from .spectral_norm import spectral_norm
 from module.commons import init_weights, get_padding
 from module.mrte_model import MRTE
 from module.quantize import ResidualVectorQuantizer
 from text import symbols
-from torch.cuda.amp import autocast
+#from torch.cuda.amp import autocast
 import contextlib
 
 
@@ -69,10 +71,10 @@ class StochasticDurationPredictor(nn.Cell):
             self.cond = nn.Conv1d(gin_channels, filter_channels, 1)
 
     def construct(self, x, x_mask, w=None, g=None, reverse=False, noise_scale=1.0):
-        x = torch.detach(x)
+        x = ops.stop_gradient(x)
         x = self.pre(x)
         if g is not None:
-            g = torch.detach(g)
+            g = ops.stop_gradient(g)
             x = x + self.cond(g)
         x = self.convs(x, x_mask)
         x = self.proj(x) * x_mask
@@ -86,7 +88,7 @@ class StochasticDurationPredictor(nn.Cell):
             h_w = self.post_convs(h_w, x_mask)
             h_w = self.post_proj(h_w) * x_mask
             e_q = (
-                torch.randn(w.shape(0), 2, w.shape(2)).to(device=x.device, dtype=x.dtype)
+                ops.randn(w.shape(0), 2, w.shape(2)).to( dtype=x.dtype)
                 * x_mask
             )
             z_q = e_q
@@ -94,13 +96,13 @@ class StochasticDurationPredictor(nn.Cell):
                 z_q, logdet_q = flow(z_q, x_mask, g=(x + h_w))
                 logdet_tot_q += logdet_q
             z_u, z1 = ops.split(z_q, [1, 1], 1)
-            u = torch.sigmoid(z_u) * x_mask
+            u = ops.sigmoid(z_u) * x_mask
             z0 = (w - u) * x_mask
-            logdet_tot_q += torch.sum(
-                (F.logsigmoid(z_u) + F.logsigmoid(-z_u)) * x_mask, [1, 2]
+            logdet_tot_q += ops.sum(
+                (ops.logsigmoid(z_u) + ops.logsigmoid(-z_u)) * x_mask, [1, 2]
             )
             logq = (
-                torch.sum(-0.5 * (math.log(2 * math.pi) + (e_q**2)) * x_mask, [1, 2])
+                ops.sum(-0.5 * (math.log(2 * math.pi) + (e_q**2)) * x_mask, [1, 2])
                 - logdet_tot_q
             )
 
@@ -112,7 +114,7 @@ class StochasticDurationPredictor(nn.Cell):
                 z, logdet = flow(z, x_mask, g=x, reverse=reverse)
                 logdet_tot = logdet_tot + logdet
             nll = (
-                torch.sum(0.5 * (math.log(2 * math.pi) + (z**2)) * x_mask, [1, 2])
+                ops.sum(0.5 * (math.log(2 * math.pi) + (z**2)) * x_mask, [1, 2])
                 - logdet_tot
             )
             return nll + logq  # [b]
@@ -120,7 +122,7 @@ class StochasticDurationPredictor(nn.Cell):
             flows = list(reversed(self.flows))
             flows = flows[:-2] + [flows[-1]]  # remove a useless vflow
             z = (
-                torch.randn(x.shape(0), 2, x.shape(2)).to(device=x.device, dtype=x.dtype)
+                ops.randn(x.shape(0), 2, x.shape(2)).to(dtype=x.dtype)
                 * noise_scale
             )
             for flow in flows:
@@ -157,16 +159,16 @@ class DurationPredictor(nn.Cell):
             self.cond = nn.Conv1d(gin_channels, in_channels, 1)
 
     def construct(self, x, x_mask, g=None):
-        x = torch.detach(x)
+        x = ops.stop_gradient(x)
         if g is not None:
-            g = torch.detach(g)
+            g = ops.stop_gradient(g)
             x = x + self.cond(g)
         x = self.conv_1(x * x_mask)
-        x = torch.relu(x)
+        x = ops.relu(x)
         x = self.norm_1(x)
         x = self.drop(x)
         x = self.conv_2(x * x_mask)
-        x = torch.relu(x)
+        x = ops.relu(x)
         x = self.norm_2(x)
         x = self.drop(x)
         x = self.proj(x * x_mask)
@@ -225,7 +227,7 @@ class TextEncoder(nn.Cell):
         self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
 
     def construct(self, y, y_lengths, text, text_lengths, ge, test=None):
-        y_mask = torch.unsqueeze(commons.sequence_mask(y_lengths, y.shape(2)), 1).to(
+        y_mask = ops.unsqueeze(commons.sequence_mask(y_lengths, y.shape(2)), 1).to(
             y.dtype
         )
 
@@ -233,7 +235,7 @@ class TextEncoder(nn.Cell):
      
         y = self.encoder_ssl(y * y_mask, y_mask)
 
-        text_mask = torch.unsqueeze(
+        text_mask = ops.unsqueeze(
             commons.sequence_mask(text_lengths, text.shape(1)), 1
         ).to(y.dtype)
         if test == 1:
@@ -345,15 +347,15 @@ class PosteriorEncoder(nn.Cell):
 
     def construct(self, x, x_lengths, g=None):
         if g != None:
-            g = g.detach()
-        x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.shape(2)), 1).to(
+            g = ops.stop_gradient(g)
+        x_mask = ops.unsqueeze(commons.sequence_mask(x_lengths, x.shape(2)), 1).to(
             x.dtype
         )
         x = self.pre(x) * x_mask
         x = self.enc(x, x_mask, g=g)
         stats = self.proj(x) * x_mask
         m, logs = ops.split(stats, self.out_channels, axis=1)
-        z = (m + torch.randn_like(m) * torch.exp(logs)) * x_mask
+        z = (m + ops.randn_like(m) * ops.exp(logs)) * x_mask
         return z, m, logs, x_mask
 
 
@@ -389,7 +391,7 @@ class WNEncoder(nn.Cell):
         self.norm = modules.LayerNorm(out_channels)
 
     def construct(self, x, x_lengths, g=None):
-        x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.shape(2)), 1).to(
+        x_mask = ops.unsqueeze(commons.sequence_mask(x_lengths, x.shape(2)), 1).to(
             x.dtype
         )
         x = self.pre(x) * x_mask
@@ -399,7 +401,7 @@ class WNEncoder(nn.Cell):
         return out
 
 
-class Generator(torch.nn.Cell):
+class Generator(nn.Cell):
     def __init__(
         self,
         initial_channel,
@@ -441,7 +443,7 @@ class Generator(torch.nn.Cell):
             ):
                 self.resblocks.append(resblock(ch, k, d))
 
-        self.conv_post = Conv1d(ch, 1, 7, 1, padding=3, bias=False)
+        self.conv_post = Conv1d(ch, 1, 7, 1, padding=3, has_bias=False)
         self.ups.apply(init_weights)
 
         if gin_channels != 0:
@@ -453,7 +455,7 @@ class Generator(torch.nn.Cell):
             x = x + self.cond(g)
 
         for i in range(self.num_upsamples):
-            x = F.leaky_relu(x, modules.LRELU_SLOPE)
+            x = ops.leaky_relu(x, modules.LRELU_SLOPE)
             x = self.ups[i](x)
             xs = None
             for j in range(self.num_kernels):
@@ -462,9 +464,9 @@ class Generator(torch.nn.Cell):
                 else:
                     xs += self.resblocks[i * self.num_kernels + j](x)
             x = xs / self.num_kernels
-        x = F.leaky_relu(x)
+        x = ops.leaky_relu(x)
         x = self.conv_post(x)
-        x = torch.tanh(x)
+        x = ops.tanh(x)
 
         return x
 
@@ -476,7 +478,7 @@ class Generator(torch.nn.Cell):
             l.remove_weight_norm()
 
 
-class DiscriminatorP(torch.nn.Cell):
+class DiscriminatorP(nn.Cell):
     def __init__(self, period, kernel_size=5, stride=3, use_spectral_norm=False):
         super(DiscriminatorP, self).__init__()
         self.period = period
@@ -540,32 +542,32 @@ class DiscriminatorP(torch.nn.Cell):
         b, c, t = x.shape
         if t % self.period != 0:  # pad first
             n_pad = self.period - (t % self.period)
-            x = F.pad(x, (0, n_pad), "reflect")
+            x = ops.pad(x, (0, n_pad), "reflect")
             t = t + n_pad
         x = x.view(b, c, t // self.period, self.period)
 
         for l in self.convs:
             x = l(x)
-            x = F.leaky_relu(x, modules.LRELU_SLOPE)
+            x = ops.leaky_relu(x, modules.LRELU_SLOPE)
             fmap.append(x)
         x = self.conv_post(x)
         fmap.append(x)
-        x = torch.flatten(x, 1, -1)
+        x = ops.flatten(x, start_dim=1, end_dim=-1)
 
         return x, fmap
 
 
-class DiscriminatorS(torch.nn.Cell):
+class DiscriminatorS(nn.Cell):
     def __init__(self, use_spectral_norm=False):
         super(DiscriminatorS, self).__init__()
         norm_f = weight_norm if use_spectral_norm == False else spectral_norm
         self.convs = nn.CellList(
             [
                 norm_f(Conv1d(1, 16, 15, 1, padding=7)),
-                norm_f(Conv1d(16, 64, 41, 4, groups=4, padding=20)),
-                norm_f(Conv1d(64, 256, 41, 4, groups=16, padding=20)),
-                norm_f(Conv1d(256, 1024, 41, 4, groups=64, padding=20)),
-                norm_f(Conv1d(1024, 1024, 41, 4, groups=256, padding=20)),
+                norm_f(Conv1d(16, 64, 41, 4, group=4, padding=20)),
+                norm_f(Conv1d(64, 256, 41, 4, group=16, padding=20)),
+                norm_f(Conv1d(256, 1024, 41, 4, group=64, padding=20)),
+                norm_f(Conv1d(1024, 1024, 41, 4, group=256, padding=20)),
                 norm_f(Conv1d(1024, 1024, 5, 1, padding=2)),
             ]
         )
@@ -576,16 +578,16 @@ class DiscriminatorS(torch.nn.Cell):
 
         for l in self.convs:
             x = l(x)
-            x = F.leaky_relu(x, modules.LRELU_SLOPE)
+            x = ops.leaky_relu(x, modules.LRELU_SLOPE)
             fmap.append(x)
         x = self.conv_post(x)
         fmap.append(x)
-        x = torch.flatten(x, 1, -1)
+        x = ops.flatten(x, start_dim=1, end_dim=-1)
 
         return x, fmap
 
 
-class MultiPeriodDiscriminator(torch.nn.Cell):
+class MultiPeriodDiscriminator(nn.Cell):
     def __init__(self, use_spectral_norm=False):
         super(MultiPeriodDiscriminator, self).__init__()
         periods = [2, 3, 5, 7, 11]
@@ -653,7 +655,7 @@ class ReferenceEncoder(nn.Cell):
         for conv in self.convs:
             out = conv(out)
             # out = wn(out)
-            out = F.relu(out)  # [N, 128, Ty//2^K, n_mels//2^K]
+            out = ops.relu(out)  # [N, 128, Ty//2^K, n_mels//2^K]
 
         out = out.swapaxes(1, 2)  # [N, Ty//2^K, 128, n_mels//2^K]
         T = out.shape(1)
@@ -671,24 +673,24 @@ class ReferenceEncoder(nn.Cell):
         return L
 
 
-class Quantizer_module(torch.nn.Cell):
+class Quantizer_module(nn.Cell):
     def __init__(self, n_e, e_dim):
         super(Quantizer_module, self).__init__()
         self.embedding = nn.Embedding(n_e, e_dim)
-        self.embedding.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)
+        self.embedding.weight.set_data(initializer(Uniform(),(-1.0 / n_e, 1.0 / n_e),self.embedding.dtype))
 
     def construct(self, x):
         d = (
-            torch.sum(x**2, 1, keepdim=True)
-            + torch.sum(self.embedding.weight**2, 1)
+            ops.sum(x**2, 1, keepdim=True)
+            + ops.sum(self.embedding.weight**2, 1)
             - 2 * ops.matmul(x, self.embedding.weight.T)
         )
-        min_indicies = torch.argmin(d, 1)
+        min_indicies = ops.argmin(d, 1)
         z_q = self.embedding(min_indicies)
         return z_q, min_indicies
 
 
-class Quantizer(torch.nn.Cell):
+class Quantizer(qnn.Cell):
     def __init__(self, embed_dim=512, n_code_groups=4, n_codes=160):
         super(Quantizer, self).__init__()
         assert embed_dim % n_code_groups == 0
@@ -714,12 +716,12 @@ class Quantizer(torch.nn.Cell):
             z_q.append(_z_q)
             min_indicies.append(_min_indicies)  # B * T,
         z_q = ops.cat(z_q, -1).reshape(xin.shape)
-        loss = 0.25 * torch.mean((z_q.detach() - xin) ** 2) + torch.mean(
-            (z_q - xin.detach()) ** 2
+        loss = 0.25 * ops.mean((ops.stop_gradient(ms.Tensor(z_q)) - xin) ** 2) + ops.mean(
+            (z_q - ops.stop_gradient(ms.Tensor(xin))) ** 2
         )
-        z_q = xin + (z_q - xin).detach()
+        z_q = xin + ops.stop_gradient(ms.Tensor(z_q - xin))
         z_q = z_q.swapaxes(1, 2)
-        codes = torch.stack(min_indicies, -1).reshape(B, T, self.n_code_groups)
+        codes = ops.stack(min_indicies, -1).reshape(B, T, self.n_code_groups)
         return z_q, loss, codes.swapaxes(1, 2)
 
     def embed(self, x):
@@ -782,17 +784,17 @@ class CodePredictor(nn.Cell):
         if not infer:
             logits = logits.reshape(-1, self.dims)
             target = target.reshape(-1)
-            loss = torch.nn.functional.cross_entropy(logits, target)
+            loss = ops.cross_entropy(logits, target)
             return loss
         else:
-            _, top10_preds = torch.topk(logits, 10, dim=-1)
-            correct_top10 = torch.any(top10_preds == target.unsqueeze(-1), dim=-1)
-            top3_acc = 100 * torch.mean(correct_top10.float()).detach().cpu().item()
+            _, top10_preds = ops.topk(logits, 10, dim=-1)
+            correct_top10 = ops.any(top10_preds == target.unsqueeze(-1), axis=-1)
+            top3_acc = 100 * ops.stop_gradient(ops.mean(correct_top10.to(ms.float32))).item()
 
             print("Top-10 Accuracy:", top3_acc, "%")
 
-            pred_codes = torch.argmax(logits, dim=-1)
-            acc = 100 * torch.mean((pred_codes == target).float()).detach().cpu().item()
+            pred_codes = ops.argmax(logits, dim=-1)
+            acc = 100 * ops.stop_gradient(ops.mean((pred_codes == target).to(ms.float32))).item()
             print("Top-1 Accuracy:", acc, "%")
 
             return pred_codes.swapaxes(0, 1)
@@ -902,24 +904,22 @@ class SynthesizerTrn(nn.Cell):
             # self.enc_p.mrte.requires_grad_(False)
 
     def construct(self, ssl, y, y_lengths, text, text_lengths):
-        y_mask = torch.unsqueeze(commons.sequence_mask(y_lengths, y.shape(2)), 1).to(
+        y_mask = ops.unsqueeze(commons.sequence_mask(y_lengths, y.shape(2)), 1).to(
             y.dtype
         )
         ge = self.ref_enc(y * y_mask, y_mask)
 
         with autocast(enabled=False):
-            maybe_no_grad = torch.no_grad() if self.freeze_quantizer else contextlib.nullcontext
-            with maybe_no_grad:
-                if self.freeze_quantizer:
-                    self.ssl_proj.eval()
-                    self.quantizer.eval()
+            if self.freeze_quantizer:
+                self.ssl_proj.eval()
+                self.quantizer.eval()
             ssl = self.ssl_proj(ssl)
             quantized, codes, commit_loss, quantized_list = self.quantizer(
                 ssl, layers=[0]
             )
 
         if self.semantic_frame_rate == "25hz":
-            quantized = F.interpolate(
+            quantized = ops.interpolate(
                 quantized, size=int(quantized.shape[-1] * 2), mode="nearest"
             )
 
@@ -944,7 +944,7 @@ class SynthesizerTrn(nn.Cell):
         )
 
     def infer(self, ssl, y, y_lengths, text, text_lengths, test=None, noise_scale=0.5):
-        y_mask = torch.unsqueeze(commons.sequence_mask(y_lengths, y.shape(2)), 1).to(
+        y_mask = ops.unsqueeze(commons.sequence_mask(y_lengths, y.shape(2)), 1).to(
             y.dtype
         )
         ge = self.ref_enc(y * y_mask, y_mask)
@@ -952,47 +952,46 @@ class SynthesizerTrn(nn.Cell):
         ssl = self.ssl_proj(ssl)
         quantized, codes, commit_loss, _ = self.quantizer(ssl, layers=[0])
         if self.semantic_frame_rate == "25hz":
-            quantized = F.interpolate(
+            quantized = ops.interpolate(
                 quantized, size=int(quantized.shape[-1] * 2), mode="nearest"
             )
 
         x, m_p, logs_p, y_mask = self.enc_p(
             quantized, y_lengths, text, text_lengths, ge, test=test
         )
-        z_p = m_p + torch.randn_like(m_p) * torch.exp(logs_p) * noise_scale
+        z_p = m_p + ops.randn_like(m_p) * ops.exp(logs_p) * noise_scale
 
         z = self.flow(z_p, y_mask, g=ge, reverse=True)
 
         o = self.dec((z * y_mask)[:, :, :], g=ge)
         return o, y_mask, (z, z_p, m_p, logs_p)
 
-    @torch.no_grad()
     def decode(self, codes, text, refer, noise_scale=0.5):
         ge = None
         if refer is not None:
-            refer_lengths = ms.Tensor([refer.shape(2)]).to(refer.device)
-            refer_mask = torch.unsqueeze(
+            refer_lengths = ops.stop_gradient(ms.Tensor([refer.shape(2)]))
+            refer_mask = ops.stop_gradient(ops.unsqueeze(
                 commons.sequence_mask(refer_lengths, refer.shape(2)), 1
-            ).to(refer.dtype)
-            ge = self.ref_enc(refer * refer_mask, refer_mask)
+            ).to(refer.dtype))
+            ge = ops.stop_gradient(self.ref_enc(refer * refer_mask, refer_mask))
 
-        y_lengths = ms.Tensor([codes.shape(2) * 2]).to(codes.device)
-        text_lengths = ms.Tensor([text.shape(-1)]).to(text.device)
+        y_lengths = ops.stop_gradient(ms.Tensor([codes.shape(2) * 2]))
+        text_lengths = ops.stop_gradient(ms.Tensor([text.shape(-1)]))
 
-        quantized = self.quantizer.decode(codes)
+        quantized = ops.stop_gradient(self.quantizer.decode(codes))
         if self.semantic_frame_rate == "25hz":
-            quantized = F.interpolate(
+            quantized = ops.stop_gradient(ops.interpolate(
                 quantized, size=int(quantized.shape[-1] * 2), mode="nearest"
-            )
+            ))
 
-        x, m_p, logs_p, y_mask = self.enc_p(
+        x, m_p, logs_p, y_mask = ops.stop_gradient(self.enc_p(
             quantized, y_lengths, text, text_lengths, ge
-        )
-        z_p = m_p + torch.randn_like(m_p) * torch.exp(logs_p) * noise_scale
+        ))
+        z_p = ops.stop_gradient(m_p + ops.randn_like(m_p) * ops.exp(logs_p) * noise_scale)
 
-        z = self.flow(z_p, y_mask, g=ge, reverse=True)
-
-        o = self.dec((z * y_mask)[:, :, :], g=ge)
+        z = ops.stop_gradient(self.flow(z_p, y_mask, g=ge, reverse=True)
+)
+        o = ops.stop_gradient(self.dec((z * y_mask)[:, :, :], g=ge))
         return o
 
     def extract_latent(self, x):

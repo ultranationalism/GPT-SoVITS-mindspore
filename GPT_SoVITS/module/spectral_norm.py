@@ -1,6 +1,7 @@
+from typing import Any, Optional, TypeVar
+
 import mindspore as ms
 from mindspore import nn,ops,Parameter
-from typing import Any, Optional, TypeVar
 from mindspore.common.initializer import initializer
 
 #TODO:The following is a temporary spectrally_norm method that may be deleted in the future.Parallel is not currently supported
@@ -131,18 +132,112 @@ class SpectralNorm:
         v = ops.stop_gradient(normalize(initializer('normal', shape=w, dtype=weight.dtype), axis =0, epsilon=fn.eps))
 
         delattr(module, fn.name)
-        module.register_parameter(fn.name + "_orig", weight)
+        new=Parameter(weight,name=fn.name + "_orig")
+        setattr(module,fn.name + "_orig",new)
+        #module.register_parameter(fn.name + "_orig", weight)
+        
         # We still need to assign weight back as fn.name because all sorts of
         # things may assume that it exists, e.g., when initializing weights.
         # However, we can't directly assign as it could be an nn.Parameter and
         # gets added as a parameter. Instead, we register weight.data as a plain
         # attribute.
-        setattr(module, fn.name, weight.data)
-        module.register_buffer(fn.name + "_u", u)
-        module.register_buffer(fn.name + "_v", v)
+
+        #module.register_buffer(fn.name + "_u", u)
+        new_u=Parameter(u,name=fn.name + "_u")
+        setattr(module,fn.name + "_u",new_u)
+        #module.register_buffer(fn.name + "_v", v)
+        new_v=Parameter(v,name=fn.name + "_v")
+        setattr(module,fn.name + "_v",new_v)
 
         module.register_forward_pre_hook(fn)
-        module._register_state_dict_hook(SpectralNormStateDictHook(fn))
-        module._register_load_state_dict_pre_hook(SpectralNormLoadStateDictPreHook(fn))
+        #module._register_state_dict_hook(SpectralNormStateDictHook(fn))
+        #module._register_load_state_dict_pre_hook(SpectralNormLoadStateDictPreHook(fn))
         return fn
 
+def SpectralNormLoadStateDictPre(fn,state_dict, prefix, local_metadata, strict,
+                 missing_keys, unexpected_keys, error_msgs):
+    # See docstring of SpectralNorm._version on the changes to spectral_norm.
+    # For state_dict with version None, (assuming that it has gone through at
+    # least one training forward), we have
+    #
+    #    u = normalize(W_orig @ v)
+    #    W = W_orig / sigma, where sigma = u @ W_orig @ v
+    #
+    # To compute `v`, we solve `W_orig @ x = u`, and let
+    #    v = x / (u @ W_orig @ x) * (W / W_orig).
+    weight_key = prefix + fn.name
+    for suffix in ('_orig', '', '_u'):
+        key = weight_key + suffix
+    weight_orig = state_dict[weight_key + '_orig']
+    weight = state_dict.pop(weight_key)
+    sigma = (weight_orig / weight).mean()
+    weight_mat = fn.reshape_weight_to_matrix(weight_orig)
+    u = state_dict[weight_key + '_u']
+    v = fn._solve_v_and_rescale(weight_mat, u, sigma)
+    state_dict[weight_key + '_v'] = v
+
+T_module = TypeVar('T_module', bound=nn.Cell)
+
+def spectral_norm(module: T_module,
+                  name: str = 'weight',
+                  n_power_iterations: int = 1,
+                  eps: float = 1e-12,
+                  dim: Optional[int] = None) -> T_module:
+    r"""Applies spectral normalization to a parameter in the given module.
+
+    .. math::
+        \mathbf{W}_{SN} = \dfrac{\mathbf{W}}{\sigma(\mathbf{W})},
+        \sigma(\mathbf{W}) = \max_{\mathbf{h}: \mathbf{h} \ne 0} \dfrac{\|\mathbf{W} \mathbf{h}\|_2}{\|\mathbf{h}\|_2}
+
+    Spectral normalization stabilizes the training of discriminators (critics)
+    in Generative Adversarial Networks (GANs) by rescaling the weight tensor
+    with spectral norm :math:`\sigma` of the weight matrix calculated using
+    power iteration method. If the dimension of the weight tensor is greater
+    than 2, it is reshaped to 2D in power iteration method to get spectral
+    norm. This is implemented via a hook that calculates spectral norm and
+    rescales weight before every :meth:`~Module.forward` call.
+
+    See `Spectral Normalization for Generative Adversarial Networks`_ .
+
+    .. _`Spectral Normalization for Generative Adversarial Networks`: https://arxiv.org/abs/1802.05957
+
+    Args:
+        module (nn.Module): containing module
+        name (str, optional): name of weight parameter
+        n_power_iterations (int, optional): number of power iterations to
+            calculate spectral norm
+        eps (float, optional): epsilon for numerical stability in
+            calculating norms
+        dim (int, optional): dimension corresponding to number of outputs,
+            the default is ``0``, except for modules that are instances of
+            ConvTranspose{1,2,3}d, when it is ``1``
+
+    Returns:
+        The original module with the spectral norm hook
+
+    .. note::
+        This function has been reimplemented as
+        :func:`torch.nn.utils.parametrizations.spectral_norm` using the new
+        parametrization functionality in
+        :func:`torch.nn.utils.parametrize.register_parametrization`. Please use
+        the newer version. This function will be deprecated in a future version
+        of PyTorch.
+
+    Example::
+
+        >>> m = spectral_norm(nn.Linear(20, 40))
+        >>> m
+        Linear(in_features=20, out_features=40, bias=True)
+        >>> m.weight_u.size()
+        torch.Size([40])
+
+    """
+    if dim is None:
+        if isinstance(module, (nn.Conv1dTranspose,
+                               nn.Conv2dTranspose,
+                               nn.Conv3dTranspose)):
+            dim = 1
+        else:
+            dim = 0
+    SpectralNorm.apply(module, name, n_power_iterations, dim, eps)
+    return module

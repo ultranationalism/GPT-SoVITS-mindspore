@@ -1,16 +1,18 @@
 import math
 import numpy as np
-import torch
-from torch import nn
-from torch.nn import functional as F
+import mindspore as ms
+from mindspore import ops,nn,Parameter
+from mindspore.common.initializer import Normal
 
-from torch.nn import Conv1d
-from torch.nn.utils import weight_norm, remove_weight_norm
+from mindspore.nn import Conv1d
+from mindnlp.modules.functional.weight_norm import remove_weight_norm, weight_norm
 
 from module import commons
 from module.commons import init_weights, get_padding
 from module.transforms import piecewise_rational_quadratic_transform
-import torch.distributions as D
+from .spectral_norm import spectral_norm as s_n
+#import torch.distributions as D
+import mindspore.nn.probability.distribution as D
 
 
 LRELU_SLOPE = 0.1
@@ -26,8 +28,9 @@ class LayerNorm(nn.Cell):
         self.beta = Parameter(ops.zeros(channels))
 
     def construct(self, x):
+        layer_norm = ops.LayerNorm()
         x = x.swapaxes(1, -1)
-        x = F.layer_norm(x, (self.channels,), self.gamma, self.beta, self.eps)
+        x = layer_norm(x, (self.channels,), self.gamma, self.beta, self.eps)
         return x.swapaxes(1, -1)
 
 
@@ -108,7 +111,7 @@ class DDSConv(nn.Cell):
                     channels,
                     channels,
                     kernel_size,
-                    groups=channels,
+                    group=channels,
                     dilation=dilation,
                     padding=padding,
                 )
@@ -123,16 +126,16 @@ class DDSConv(nn.Cell):
         for i in range(self.n_layers):
             y = self.convs_sep[i](x * x_mask)
             y = self.norms_1[i](y)
-            y = F.gelu(y)
+            y = ops.gelu(y)
             y = self.convs_1x1[i](y)
             y = self.norms_2[i](y)
-            y = F.gelu(y)
+            y = ops.gelu(y)
             y = self.drop(y)
             x = x + y
         return x * x_mask
 
 
-class WN(torch.nn.Cell):
+class WN(nn.Cell):
     def __init__(
         self,
         hidden_channels,
@@ -151,27 +154,27 @@ class WN(torch.nn.Cell):
         self.gin_channels = gin_channels
         self.p_dropout = p_dropout
 
-        self.in_layers = torch.nn.CellList()
-        self.res_skip_layers = torch.nn.CellList()
+        self.in_layers = nn.CellList()
+        self.res_skip_layers = nn.CellList()
         self.drop = nn.Dropout(p=p_dropout)
 
         if gin_channels != 0:
-            cond_layer = torch.nn.Conv1d(
+            cond_layer = nn.Conv1d(
                 gin_channels, 2 * hidden_channels * n_layers, 1
             )
-            self.cond_layer = torch.nn.utils.weight_norm(cond_layer, name="weight")
+            self.cond_layer = weight_norm(cond_layer, name="weight")
 
         for i in range(n_layers):
             dilation = dilation_rate**i
             padding = int((kernel_size * dilation - dilation) / 2)
-            in_layer = torch.nn.Conv1d(
+            in_layer = nn.Conv1d(
                 hidden_channels,
                 2 * hidden_channels,
                 kernel_size,
                 dilation=dilation,
                 padding=padding,
             )
-            in_layer = torch.nn.utils.weight_norm(in_layer, name="weight")
+            in_layer = weight_norm(in_layer, name="weight")
             self.in_layers.append(in_layer)
 
             # last one is not necessary
@@ -180,13 +183,13 @@ class WN(torch.nn.Cell):
             else:
                 res_skip_channels = hidden_channels
 
-            res_skip_layer = torch.nn.Conv1d(hidden_channels, res_skip_channels, 1)
-            res_skip_layer = torch.nn.utils.weight_norm(res_skip_layer, name="weight")
+            res_skip_layer = Conv1d(hidden_channels, res_skip_channels, 1)
+            res_skip_layer = weight_norm(res_skip_layer, name="weight")
             self.res_skip_layers.append(res_skip_layer)
 
     def construct(self, x, x_mask, g=None, **kwargs):
-        output = torch.zeros_like(x)
-        n_channels_tensor = torch.IntTensor([self.hidden_channels])
+        output = ops.zeros_like(x)
+        n_channels_tensor = ms.Tensor([self.hidden_channels],ms.int32)
 
         if g is not None:
             g = self.cond_layer(g)
@@ -197,7 +200,7 @@ class WN(torch.nn.Cell):
                 cond_offset = i * 2 * self.hidden_channels
                 g_l = g[:, cond_offset : cond_offset + 2 * self.hidden_channels, :]
             else:
-                g_l = torch.zeros_like(x_in)
+                g_l = ops.zeros_like(x_in)
 
             acts = commons.fused_add_tanh_sigmoid_multiply(x_in, g_l, n_channels_tensor)
             acts = self.drop(acts)
@@ -213,14 +216,14 @@ class WN(torch.nn.Cell):
 
     def remove_weight_norm(self):
         if self.gin_channels != 0:
-            torch.nn.utils.remove_weight_norm(self.cond_layer)
+            remove_weight_norm(self.cond_layer)
         for l in self.in_layers:
-            torch.nn.utils.remove_weight_norm(l)
+            remove_weight_norm(l)
         for l in self.res_skip_layers:
-            torch.nn.utils.remove_weight_norm(l)
+            remove_weight_norm(l)
 
 
-class ResBlock1(torch.nn.Cell):
+class ResBlock1(nn.Cell):
     def __init__(self, channels, kernel_size=3, dilation=(1, 3, 5)):
         super(ResBlock1, self).__init__()
         self.convs1 = nn.CellList(
@@ -297,11 +300,11 @@ class ResBlock1(torch.nn.Cell):
 
     def construct(self, x, x_mask=None):
         for c1, c2 in zip(self.convs1, self.convs2):
-            xt = F.leaky_relu(x, LRELU_SLOPE)
+            xt = ops.leaky_relu(x, LRELU_SLOPE)
             if x_mask is not None:
                 xt = xt * x_mask
             xt = c1(xt)
-            xt = F.leaky_relu(xt, LRELU_SLOPE)
+            xt = ops.leaky_relu(xt, LRELU_SLOPE)
             if x_mask is not None:
                 xt = xt * x_mask
             xt = c2(xt)
@@ -317,7 +320,7 @@ class ResBlock1(torch.nn.Cell):
             remove_weight_norm(l)
 
 
-class ResBlock2(torch.nn.Cell):
+class ResBlock2(nn.Cell):
     def __init__(self, channels, kernel_size=3, dilation=(1, 3)):
         super(ResBlock2, self).__init__()
         self.convs = nn.CellList(
@@ -348,7 +351,7 @@ class ResBlock2(torch.nn.Cell):
 
     def construct(self, x, x_mask=None):
         for c in self.convs:
-            xt = F.leaky_relu(x, LRELU_SLOPE)
+            xt = ops.leaky_relu(x, LRELU_SLOPE)
             if x_mask is not None:
                 xt = xt * x_mask
             xt = c(xt)
@@ -365,17 +368,17 @@ class ResBlock2(torch.nn.Cell):
 class Log(nn.Cell):
     def construct(self, x, x_mask, reverse=False, **kwargs):
         if not reverse:
-            y = torch.log(torch.clamp_min(x, 1e-5)) * x_mask
-            logdet = torch.sum(-y, [1, 2])
+            y = ops.log(ops.clamp_min(x, 1e-5)) * x_mask
+            logdet = ops.sum(-y, [1, 2])
             return y, logdet
         else:
-            x = torch.exp(x) * x_mask
+            x = ops.exp(x) * x_mask
             return x
 
 
 class Flip(nn.Cell):
     def construct(self, x, *args, reverse=False, **kwargs):
-        x = torch.flip(x, [1])
+        x = ops.flip(x, [1])
         if not reverse:
             logdet = ops.zeros(x.shape(0)).to(dtype=x.dtype, device=x.device)
             return x, logdet
@@ -387,17 +390,17 @@ class ElementwiseAffine(nn.Cell):
     def __init__(self, channels):
         super().__init__()
         self.channels = channels
-        self.m = Parameter(ops.zeros(channels, 1))
-        self.logs = Parameter(ops.zeros(channels, 1))
+        self.m = Parameter(ops.zeros([channels, 1]))
+        self.logs = Parameter(ops.zeros([channels, 1]))
 
     def construct(self, x, x_mask, reverse=False, **kwargs):
         if not reverse:
-            y = self.m + torch.exp(self.logs) * x
+            y = self.m + ops.exp(self.logs) * x
             y = y * x_mask
-            logdet = torch.sum(self.logs * x_mask, [1, 2])
+            logdet = ops.sum(self.logs * x_mask, [1, 2])
             return y, logdet
         else:
-            x = (x - self.m) * torch.exp(-self.logs) * x_mask
+            x = (x - self.m) * ops.exp(-self.logs) * x_mask
             return x
 
 
@@ -445,15 +448,15 @@ class ResidualCouplingLayer(nn.Cell):
             m, logs = ops.split(stats, [self.half_channels] * 2, 1)
         else:
             m = stats
-            logs = torch.zeros_like(m)
+            logs = ops.zeros_like(m)
 
         if not reverse:
-            x1 = m + x1 * torch.exp(logs) * x_mask
+            x1 = m + x1 * ops.exp(logs) * x_mask
             x = ops.cat([x0, x1], 1)
-            logdet = torch.sum(logs, [1, 2])
+            logdet = ops.sum(logs, [1, 2])
             return x, logdet
         else:
-            x1 = (x1 - m) * torch.exp(-logs) * x_mask
+            x1 = (x1 - m) * ops.exp(-logs) * x_mask
             x = ops.cat([x0, x1], 1)
             return x
 
@@ -511,7 +514,7 @@ class ConvFlow(nn.Cell):
         )
 
         x = ops.cat([x0, x1], 1) * x_mask
-        logdet = torch.sum(logabsdet * x_mask, [1, 2])
+        logdet = ops.sum(logabsdet * x_mask, [1, 2])
         if not reverse:
             return x, logdet
         else:
@@ -530,7 +533,7 @@ class LinearNorm(nn.Cell):
         self.fc = nn.Dense(in_channels, out_channels, bias)
 
         if spectral_norm:
-            self.fc = nn.utils.spectral_norm(self.fc)
+            self.fc = s_n(self.fc)
 
     def construct(self, input):
         out = self.fc(input)
@@ -542,7 +545,7 @@ class Mish(nn.Cell):
         super(Mish, self).__init__()
 
     def construct(self, x):
-        return x * torch.tanh(F.softplus(x))
+        return x * ops.tanh(ops.softplus(x))
 
 
 class Conv1dGLU(nn.Cell):
@@ -561,7 +564,7 @@ class Conv1dGLU(nn.Cell):
         residual = x
         x = self.conv1(x)
         x1, x2 = ops.split(x, split_size_or_sections=self.out_channels, axis=1)
-        x = x1 * torch.sigmoid(x2)
+        x = x1 * ops.sigmoid(x2)
         x = residual + self.dropout(x)
         return x
 
@@ -584,18 +587,18 @@ class ConvNorm(nn.Cell):
             assert kernel_size % 2 == 1
             padding = int(dilation * (kernel_size - 1) / 2)
 
-        self.conv = torch.nn.Conv1d(
+        self.conv = nn.Conv1d(
             in_channels,
             out_channels,
             kernel_size=kernel_size,
             stride=stride,
             padding=padding,
             dilation=dilation,
-            bias=bias,
+            has_bias=bias,
         )
 
         if spectral_norm:
-            self.conv = nn.utils.spectral_norm(self.conv)
+            self.conv = s_n(self.conv)
 
     def construct(self, input):
         out = self.conv(input)
@@ -624,10 +627,10 @@ class MultiHeadAttention(nn.Cell):
         self.dropout = nn.Dropout(p=dropout)
 
         if spectral_norm:
-            self.w_qs = nn.utils.spectral_norm(self.w_qs)
-            self.w_ks = nn.utils.spectral_norm(self.w_ks)
-            self.w_vs = nn.utils.spectral_norm(self.w_vs)
-            self.fc = nn.utils.spectral_norm(self.fc)
+            self.w_qs = s_n(self.w_qs)
+            self.w_ks = s_n(self.w_ks)
+            self.w_vs = s_n(self.w_vs)
+            self.fc = s_n(self.fc)
 
     def construct(self, x, mask=None):
         d_k, d_v, n_head = self.d_k, self.d_v, self.n_head
@@ -665,11 +668,11 @@ class ScaledDotProductAttention(nn.Cell):
     def __init__(self, temperature, dropout):
         super().__init__()
         self.temperature = temperature
-        self.softmax = nn.Softmax(dim=2)
+        self.softmax = nn.Softmax(axis=2)
         self.dropout = nn.Dropout(p=dropout)
 
     def construct(self, q, k, v, mask=None):
-        attn = torch.bmm(q, k.swapaxes(1, 2))
+        attn = ops.bmm(q, k.swapaxes(1, 2))
         attn = attn / self.temperature
 
         if mask is not None:
@@ -678,7 +681,7 @@ class ScaledDotProductAttention(nn.Cell):
         attn = self.softmax(attn)
         p_attn = self.dropout(attn)
 
-        output = torch.bmm(p_attn, v)
+        output = ops.bmm(p_attn, v)
         return output, attn
 
 
@@ -728,12 +731,12 @@ class MelStyleEncoder(nn.Cell):
 
     def temporal_avg_pool(self, x, mask=None):
         if mask is None:
-            out = torch.mean(x, dim=1)
+            out = ops.mean(x, axis=1)
         else:
             len_ = (~mask).sum(dim=1).unsqueeze(1)
             x = x.masked_fill(mask.unsqueeze(-1), 0)
             x = x.sum(dim=1)
-            out = torch.div(x, len_)
+            out = ops.div(x, len_)
         return out
 
     def construct(self, x, mask=None):
@@ -774,8 +777,8 @@ class MelStyleEncoderVAE(nn.Cell):
 
     def reparameterize(self, mu, logvar):
         if self.training:
-            std = torch.exp(0.5 * logvar)
-            eps = torch.randn_like(std)
+            std = ops.exp(0.5 * logvar)
+            eps = ops.randn_like(std)
             return eps.mul(std).add_(mu)
         else:
             return mu
@@ -784,11 +787,10 @@ class MelStyleEncoderVAE(nn.Cell):
         enc_out = self.ref_encoder(inputs.squeeze(-1), mask).squeeze(-1)
         mu = self.fc1(enc_out)
         logvar = self.fc2(enc_out)
-        posterior = D.Normal(mu, torch.exp(logvar))
-        kl_divergence = D.kl_divergence(
-            posterior, D.Normal(torch.zeros_like(mu), torch.ones_like(logvar))
-        )
-        loss_kl = kl_divergence.mean()
+        posterior = D.Normal(mu, ops.exp(logvar))
+        tmp=D.Normal(ops.zeros_like(mu), ops.ones_like(logvar))
+        loss_kl = posterior.kl_loss('Normal',[tmp.mean,tmp.sd]).mean() #可能会出错，如果输出直接是mean后的结果
+        #loss_kl = kl_divergence.mean()
 
         z = posterior.rsample()
         style_embed = self.fc3(z)
@@ -798,10 +800,9 @@ class MelStyleEncoderVAE(nn.Cell):
     def infer(self, inputs=None, random_sample=False, manual_latent=None):
         if manual_latent is None:
             if random_sample:
-                dev = next(self.parameters()).device
                 posterior = D.Normal(
-                    ops.zeros(1, self.z_latent_dim, device=dev),
-                    ops.ones(1, self.z_latent_dim, device=dev),
+                    ops.zeros([1, self.z_latent_dim]),
+                    ops.ones([1, self.z_latent_dim]),
                 )
                 z = posterior.rsample()
             else:
@@ -820,26 +821,26 @@ class ActNorm(nn.Cell):
         self.channels = channels
         self.initialized = not ddi
 
-        self.logs = Parameter(ops.zeros(1, channels, 1))
-        self.bias = Parameter(ops.zeros(1, channels, 1))
+        self.logs = Parameter(ops.zeros([1, channels, 1]))
+        self.bias = Parameter(ops.zeros([1, channels, 1]))
 
     def construct(self, x, x_mask=None, g=None, reverse=False, **kwargs):
         if x_mask is None:
-            x_mask = ops.ones(x.shape(0), 1, x.shape(2)).to(
-                device=x.device, dtype=x.dtype
+            x_mask = ops.ones([x.shape(0), 1, x.shape(2)]).to(
+                 dtype=x.dtype
             )
-        x_len = torch.sum(x_mask, [1, 2])
+        x_len = ops.sum(x_mask, [1, 2])
         if not self.initialized:
             self.initialize(x, x_mask)
             self.initialized = True
 
         if reverse:
-            z = (x - self.bias) * torch.exp(-self.logs) * x_mask
+            z = (x - self.bias) * ops.exp(-self.logs) * x_mask
             logdet = None
             return z
         else:
-            z = (self.bias + torch.exp(self.logs) * x) * x_mask
-            logdet = torch.sum(self.logs) * x_len  # [b]
+            z = (self.bias + ops.exp(self.logs) * x) * x_mask
+            logdet = ops.sum(self.logs) * x_len  # [b]
             return z, logdet
 
     def store_inverse(self):
@@ -849,20 +850,19 @@ class ActNorm(nn.Cell):
         self.initialized = not ddi
 
     def initialize(self, x, x_mask):
-        with torch.no_grad():
-            denom = torch.sum(x_mask, [0, 2])
-            m = torch.sum(x * x_mask, [0, 2]) / denom
-            m_sq = torch.sum(x * x * x_mask, [0, 2]) / denom
-            v = m_sq - (m**2)
-            logs = 0.5 * torch.log(torch.clamp_min(v, 1e-6))
+        denom = ops.stop_gradient(ops.sum(x_mask, [0, 2]))
+        m = ops.stop_gradient(ops.sum(x * x_mask, [0, 2]) / denom)
+        m_sq = ops.stop_gradient(ops.sum(x * x * x_mask, [0, 2]) / denom)
+        v = ops.stop_gradient(m_sq - (m**2))
+        logs = ops.stop_gradient(0.5 * ops.log(ops.clamp(v, min=1e-6)))
 
-            bias_init = (
-                (-m * torch.exp(-logs)).view(*self.bias.shape).to(dtype=self.bias.dtype)
-            )
-            logs_init = (-logs).view(*self.logs.shape).to(dtype=self.logs.dtype)
+        bias_init = ops.stop_gradient(
+            (-m * ops.exp(-logs)).view(*self.bias.shape).to(dtype=self.bias.dtype)
+        )
+        logs_init = ops.stop_gradient((-logs).view(*self.logs.shape).to(dtype=self.logs.dtype))
 
-            self.bias.data.copy_(bias_init)
-            self.logs.data.copy_(logs_init)
+        self.bias.data=ops.stop_gradient(bias_init)
+        self.logs.data=ops.stop_gradient(logs_init)
 
 
 class InvConvNear(nn.Cell):
@@ -873,10 +873,10 @@ class InvConvNear(nn.Cell):
         self.n_split = n_split
         self.no_jacobian = no_jacobian
 
-        w_init = torch.linalg.qr(
-            mindspore.Tensor(self.n_split, self.n_split).normal_()
+        w_init = ops.geqrf(
+            ms.Tensor(self.n_split, self.n_split,init=Normal()).init_data()
         )[0]
-        if torch.det(w_init) < 0:
+        if ops.det(w_init) < 0:
             w_init[:, 0] = -1 * w_init[:, 0]
         self.weight = Parameter(w_init)
 
@@ -885,14 +885,13 @@ class InvConvNear(nn.Cell):
         assert c % self.n_split == 0
         if x_mask is None:
             x_mask = 1
-            x_len = ops.ones((b,), dtype=x.dtype, device=x.device) * t
+            x_len = ops.ones((b,), dtype=x.dtype) * t
         else:
-            x_len = torch.sum(x_mask, [1, 2])
+            x_len = ops.sum(x_mask, [1, 2])
 
         x = x.view(b, 2, c // self.n_split, self.n_split // 2, t)
         x = (
             x.permute(0, 1, 3, 2, 4)
-            .contiguous()
             .view(b, self.n_split, c // self.n_split, t)
         )
 
@@ -900,24 +899,24 @@ class InvConvNear(nn.Cell):
             if hasattr(self, "weight_inv"):
                 weight = self.weight_inv
             else:
-                weight = torch.inverse(self.weight.float()).to(dtype=self.weight.dtype)
+                weight = ops.inverse(self.weight.float()).to(dtype=self.weight.dtype)
             logdet = None
         else:
             weight = self.weight
             if self.no_jacobian:
                 logdet = 0
             else:
-                logdet = torch.logdet(self.weight) * (c / self.n_split) * x_len  # [b]
+                logdet = ops.logdet(self.weight) * (c / self.n_split) * x_len  # [b]
 
         weight = weight.view(self.n_split, self.n_split, 1, 1)
-        z = F.conv2d(x, weight)
+        z = ops.conv2d(x, weight)
 
         z = z.view(b, 2, self.n_split // 2, c // self.n_split, t)
-        z = z.permute(0, 1, 3, 2, 4).contiguous().view(b, c, t) * x_mask
+        z = z.permute(0, 1, 3, 2, 4).view(b, c, t) * x_mask
         if reverse:
             return z
         else:
             return z, logdet
 
     def store_inverse(self):
-        self.weight_inv = torch.inverse(self.weight.float()).to(dtype=self.weight.dtype)
+        self.weight_inv = ops.inverse(self.weight.float()).to(dtype=self.weight.dtype)
