@@ -5,7 +5,7 @@ import torch
 from torch import nn
 
 
-class TokenEmbedding(nn.Module):
+class TokenEmbedding(nn.Cell):
     def __init__(
         self,
         embedding_dim: int,
@@ -21,19 +21,19 @@ class TokenEmbedding(nn.Module):
         self.word_embeddings = nn.Embedding(self.vocab_size, self.embedding_dim)
 
     @property
-    def weight(self) -> torch.Tensor:
+    def weight(self) -> ms.Tensor:
         return self.word_embeddings.weight
 
-    def embedding(self, index: int) -> torch.Tensor:
+    def embedding(self, index: int) -> ms.Tensor:
         return self.word_embeddings.weight[index : index + 1]
 
-    def forward(self, x: torch.Tensor):
+    def construct(self, x: ms.Tensor):
         x = self.word_embeddings(x)
         x = self.dropout(x)
         return x
 
 
-class SinePositionalEmbedding(nn.Module):
+class SinePositionalEmbedding(nn.Cell):
     def __init__(
         self,
         embedding_dim: int,
@@ -44,19 +44,19 @@ class SinePositionalEmbedding(nn.Module):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.x_scale = math.sqrt(embedding_dim) if scale else 1.0
-        self.alpha = nn.Parameter(torch.ones(1), requires_grad=alpha)
+        self.alpha = nn.Parameter(ops.ones(1), requires_grad=alpha)
         self.dropout = torch.nn.Dropout(p=dropout)
         self.reverse = False
         self.div_term = torch.exp(torch.arange(0, self.embedding_dim, 2) * -(math.log(10000.0) / self.embedding_dim))
 
     def extend_pe(self, x):
-        position = torch.cumsum(torch.ones_like(x[:,:,0]), dim=1).transpose(0, 1)
+        position = torch.cumsum(torch.ones_like(x[:,:,0]), dim=1).swapaxes(0, 1)
         scpe = (position * self.div_term).unsqueeze(0)
-        pe = torch.cat([torch.sin(scpe), torch.cos(scpe)]).permute(1, 2, 0)
+        pe = ops.cat([torch.sin(scpe), torch.cos(scpe)]).permute(1, 2, 0)
         pe = pe.contiguous().view(1, -1, self.embedding_dim)
         return pe
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def construct(self, x: ms.Tensor) -> ms.Tensor:
         pe = self.extend_pe(x)
         output = x.unsqueeze(-1) if x.ndim == 2 else x
         output = output * self.x_scale + self.alpha * pe

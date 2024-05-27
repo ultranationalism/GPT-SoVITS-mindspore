@@ -19,9 +19,9 @@ from collections import defaultdict
 from typing import List
 from typing import Tuple
 
-import torch
-from torch import Tensor
-from torch.optim import Optimizer
+import mindspore as ms
+from mindspore import Tensor,ops,nn
+from mindspore.experimental.optim import Optimizer
 
 
 class BatchedOptimizer(Optimizer):
@@ -105,9 +105,9 @@ class BatchedOptimizer(Optimizer):
             # state corresponding to the 1st parameter in the
             # group.  class Optimizer will take care of saving/loading state.
             state = self.state[p]
-            p_stacked = torch.stack(batch)
-            grad = torch.stack([
-                torch.zeros_like(p) if p.grad is None else p.grad for p in batch
+            p_stacked = ops.stack(batch)
+            grad = ops.stack([
+                ops.zeros_like(p) if p.grad is None else p.grad for p in batch
             ])
             p_stacked.grad = grad
             stacked_params_dict[key] = p_stacked
@@ -290,7 +290,7 @@ class ScaledAdam(BatchedOptimizer):
             state["param_rms"] = param_rms
 
             state["scale_exp_avg_sq"] = torch.zeros_like(param_rms)
-            state["scale_grads"] = torch.zeros(size_update_period,
+            state["scale_grads"] = ops.zeros(size_update_period,
                                                *param_rms.shape, **kwargs)
 
         # exp_avg_sq is the weighted sum of scaled gradients. as in Adam.
@@ -324,7 +324,7 @@ class ScaledAdam(BatchedOptimizer):
             return 1.0
         clipping_update_period = group["clipping_update_period"]
 
-        tot_sumsq = torch.tensor(0.0, device=first_p.device)
+        tot_sumsq = ms.Tensor(0.0, device=first_p.device)
         for (p, state, param_names) in tuples:
             grad = p.grad
             if grad.is_sparse:
@@ -337,7 +337,7 @@ class ScaledAdam(BatchedOptimizer):
 
         tot_norm = tot_sumsq.sqrt()
         if "model_norms" not in first_state:
-            first_state["model_norms"] = torch.zeros(
+            first_state["model_norms"] = ops.zeros(
                 clipping_update_period, device=p.device)
         first_state["model_norms"][step % clipping_update_period] = tot_norm
 
@@ -412,7 +412,7 @@ class ScaledAdam(BatchedOptimizer):
             if p.numel() == p.shape[0]:  # a batch of scalars
                 batch_sumsq_orig = batch_grad**2
                 # Dummpy values used by following `zip` statement.
-                batch_rms_orig = torch.ones(p.shape[0])
+                batch_rms_orig = ops.ones(p.shape[0])
             else:
                 batch_rms_orig = state["param_rms"]
                 batch_sumsq_orig = ((batch_grad * batch_rms_orig)**2).sum(
@@ -427,7 +427,7 @@ class ScaledAdam(BatchedOptimizer):
 
         assert torch.isclose(
             sum([value[0] for value in all_sumsq_orig.values()]).cpu(),
-            torch.tensor(1.0), )
+            ms.Tensor(1.0), )
         sorted_by_proportion = {
             k: v
             for k, v in sorted(

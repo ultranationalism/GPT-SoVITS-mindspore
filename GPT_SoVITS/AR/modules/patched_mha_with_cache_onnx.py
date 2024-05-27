@@ -48,15 +48,15 @@ def multi_head_attention_forward_patched(
     head_dim = embed_dim // num_heads
 
     proj_qkv = linear(query, in_proj_weight, in_proj_bias)
-    proj_qkv = proj_qkv.unflatten(-1, (3, query.size(-1))).unsqueeze(0).transpose(0, -2).squeeze(-2).contiguous()
+    proj_qkv = proj_qkv.unflatten(-1, (3, query.shape(-1))).unsqueeze(0).swapaxes(0, -2).squeeze(-2).contiguous()
     q, k, v = proj_qkv[0], proj_qkv[1], proj_qkv[2]
 
     if cache["first_infer"] == 1:
         cache["k"][cache["stage"]] = k
         cache["v"][cache["stage"]] = v
     else:
-        cache["k"][cache["stage"]] = torch.cat([cache["k"][cache["stage"]][:-1], k], 0)
-        cache["v"][cache["stage"]] = torch.cat([cache["v"][cache["stage"]][:-1], v], 0)
+        cache["k"][cache["stage"]] = ops.cat([cache["k"][cache["stage"]][:-1], k], 0)
+        cache["v"][cache["stage"]] = ops.cat([cache["v"][cache["stage"]][:-1], v], 0)
         k = cache["k"][cache["stage"]]
         v = cache["v"][cache["stage"]]
     cache["stage"] = (cache["stage"] + 1) % cache["all_stage"]
@@ -71,9 +71,9 @@ def multi_head_attention_forward_patched(
     )
     attn_mask = attn_mask.unsqueeze(0)
 
-    q = q.view(-1, num_heads, head_dim).transpose(0, 1)
-    k = k.view(-1, num_heads, head_dim).transpose(0, 1)
-    v = v.view(-1, num_heads, head_dim).transpose(0, 1)
+    q = q.view(-1, num_heads, head_dim).swapaxes(0, 1)
+    k = k.view(-1, num_heads, head_dim).swapaxes(0, 1)
+    v = v.view(-1, num_heads, head_dim).swapaxes(0, 1)
 
     dropout_p = 0.0
     attn_mask = attn_mask.unsqueeze(0)
@@ -87,6 +87,6 @@ def multi_head_attention_forward_patched(
         attn_output.permute(2, 0, 1, 3).contiguous().view(-1, embed_dim)
     )
     attn_output = linear(attn_output, out_proj_weight, out_proj_bias)
-    attn_output = attn_output.view(-1, 1, attn_output.size(1))
+    attn_output = attn_output.view(-1, 1, attn_output.shape(1))
 
     return attn_output

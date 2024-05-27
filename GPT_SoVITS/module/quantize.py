@@ -10,18 +10,18 @@ from dataclasses import dataclass, field
 import math
 import typing as tp
 
-import torch
-from torch import nn
+import mindspore as ms
+from mindspore import nn,ops
 
 from module.core_vq import ResidualVectorQuantization
 
 
 @dataclass
 class QuantizedResult:
-    quantized: mindspore.Tensor
-    codes: mindspore.Tensor
-    bandwidth: mindspore.Tensor  # bandwidth in kb/s used, per batch item.
-    penalty: tp.Optional[mindspore.Tensor] = None
+    quantized: ms.Tensor
+    codes: ms.Tensor
+    bandwidth: ms.Tensor  # bandwidth in kb/s used, per batch item.
+    penalty: tp.Optional[ms.Tensor] = None
     metrics: dict = field(default_factory=dict)
 
 
@@ -69,13 +69,13 @@ class ResidualVectorQuantizer(nn.Cell):
 
     def construct(
         self,
-        x: mindspore.Tensor,
+        x: ms.Tensor,
         n_q: tp.Optional[int] = None,
         layers: tp.Optional[list] = None,
     ) -> QuantizedResult:
         """Residual vector quantization on the given input tensor.
         Args:
-            x (mindspore.Tensor): Input tensor.
+            x (ms.Tensor): Input tensor.
             n_q (int): Number of quantizer used to quantize. Default: All quantizers.
             layers (list): Layer that need to return quantized. Defalt: None.
         Returns:
@@ -91,16 +91,16 @@ class ResidualVectorQuantizer(nn.Cell):
         quantized, codes, commit_loss, quantized_list = self.vq(
             x, n_q=n_q, layers=layers
         )
-        return quantized, codes, torch.mean(commit_loss), quantized_list
+        return quantized, codes, ops.mean(commit_loss), quantized_list
 
     def encode(
-        self, x: mindspore.Tensor, n_q: tp.Optional[int] = None, st: tp.Optional[int] = None
-    ) -> mindspore.Tensor:
+        self, x: ms.Tensor, n_q: tp.Optional[int] = None, st: tp.Optional[int] = None
+    ) -> ms.Tensor:
         """Encode a given input tensor with the specified sample rate at the given bandwidth.
         The RVQ encode method sets the appropriate number of quantizer to use
         and returns indices for each quantizer.
         Args:
-            x (mindspore.Tensor): Input tensor.
+            x (ms.Tensor): Input tensor.
             n_q (int): Number of quantizer used to quantize. Default: All quantizers.
             st (int): Start to encode input from which layers. Default: 0.
         """
@@ -109,10 +109,10 @@ class ResidualVectorQuantizer(nn.Cell):
         codes = self.vq.encode(x, n_q=n_q, st=st)
         return codes
 
-    def decode(self, codes: mindspore.Tensor, st: int = 0) -> mindspore.Tensor:
+    def decode(self, codes: ms.Tensor, st: int = 0) -> ms.Tensor:
         """Decode the given codes to the quantized representation.
         Args:
-            codes (mindspore.Tensor): Input indices for each quantizer.
+            codes (ms.Tensor): Input indices for each quantizer.
             st (int): Start to decode input codes from which layers. Default: 0.
         """
         quantized = self.vq.decode(codes, st=st)

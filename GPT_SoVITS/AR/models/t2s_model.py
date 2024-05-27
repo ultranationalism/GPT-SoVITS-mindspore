@@ -1,6 +1,6 @@
 # modified from https://github.com/yangdongchao/SoundStorm/blob/master/soundstorm/s1/AR/models/t2s_model.py
 # reference: https://github.com/lifeiteng/vall-e
-import torch
+#import torch
 from tqdm import tqdm
 
 from AR.models.utils import make_pad_mask
@@ -15,12 +15,12 @@ from AR.models.utils import (
 )
 from AR.modules.embedding import SinePositionalEmbedding
 from AR.modules.embedding import TokenEmbedding
-from AR.modules.transformer import LayerNorm
-from AR.modules.transformer import TransformerEncoder
-from AR.modules.transformer import TransformerEncoderLayer
-from torch import nn
-from torch.nn import functional as F
-from torchmetrics.classification import MulticlassAccuracy
+import mindspore as ms
+from mindspore.nn import LayerNorm
+from mindspore.nn import TransformerEncoder
+from mindspore.nn import TransformerEncoderLayer
+from mindspore import nn,ops,Parameter
+#from torchmetrics.classification import MulticlassAccuracy
 
 default_config = {
     "embedding_dim": 512,
@@ -35,7 +35,7 @@ default_config = {
 }
 
 
-class Text2SemanticDecoder(nn.Module):
+class Text2SemanticDecoder(nn.Cell):
     def __init__(self, config, norm_first=False, top_k=3):
         super(Text2SemanticDecoder, self).__init__()
         self.model_dim = config["model"]["hidden_dim"]
@@ -51,7 +51,7 @@ class Text2SemanticDecoder(nn.Module):
         assert self.EOS == self.vocab_size - 1
         # should be same as num of kmeans bin
         # assert self.EOS == 1024
-        self.bert_proj = nn.Linear(1024, self.embedding_dim)
+        self.bert_proj = nn.Dense(1024, self.embedding_dim)
         self.ar_text_embedding = TokenEmbedding(
             self.embedding_dim, self.phoneme_vocab_size, self.p_dropout
         )
@@ -78,26 +78,27 @@ class Text2SemanticDecoder(nn.Module):
             norm=LayerNorm(self.model_dim) if norm_first else None,
         )
 
-        self.ar_predict_layer = nn.Linear(self.model_dim, self.vocab_size, bias=False)
+        self.ar_predict_layer = nn.Dense(self.model_dim, self.vocab_size, bias=False)
         self.loss_fct = nn.CrossEntropyLoss(reduction="sum")
 
+        """
         self.ar_accuracy_metric = MulticlassAccuracy(
             self.vocab_size,
             top_k=top_k,
             average="micro",
             multidim_average="global",
             ignore_index=self.EOS,
-        )
+        )"""
 
     def make_input_data(self, x, x_lens, y, y_lens, bert_feature):
         x = self.ar_text_embedding(x)
-        x = x + self.bert_proj(bert_feature.transpose(1, 2))
+        x = x + self.bert_proj(bert_feature.swapaxes(1, 2))
         x = self.ar_text_position(x)
         x_mask = make_pad_mask(x_lens)
 
         y_mask = make_pad_mask(y_lens)
-        y_mask_int = y_mask.type(torch.int64)
-        codes = y.type(torch.int64) * (1 - y_mask_int)
+        y_mask_int = y_mask.type(ms.int64)
+        codes = y.type(ms.int64) * (1 - y_mask_int)
 
         # Training
         # AR Decoder
@@ -107,42 +108,42 @@ class Text2SemanticDecoder(nn.Module):
         y_emb = self.ar_audio_embedding(y)
         y_pos = self.ar_audio_position(y_emb)
 
-        xy_padding_mask = torch.concat([x_mask, y_mask], dim=1)
+        xy_padding_mask = ops.concat([x_mask, y_mask], axis=1)
 
         ar_xy_padding_mask = xy_padding_mask
 
-        x_attn_mask = F.pad(
-            torch.zeros((x_len, x_len), dtype=torch.bool, device=x.device),
+        x_attn_mask = ops.pad(
+            ops.zeros((x_len, x_len), dtype=ms.bool_),
             (0, y_len),
             value=True,
         )
         
-        y_attn_mask = F.pad(
-            torch.triu(
-                torch.ones(y_len, y_len, dtype=torch.bool, device=x.device),
+        y_attn_mask = ops.pad(
+            ops.triu(
+                ops.ones((y_len, y_len), dtype=ms.bool_),
                 diagonal=1,
             ),
             (x_len, 0),
             value=False,
         )
 
-        xy_attn_mask = torch.concat([x_attn_mask, y_attn_mask], dim=0)
+        xy_attn_mask = ops.concat([x_attn_mask, y_attn_mask], axis=0)
         bsz, src_len = x.shape[0], x_len + y_len
         _xy_padding_mask = (
             ar_xy_padding_mask.view(bsz, 1, 1, src_len)
-            .expand(-1, self.num_head, -1, -1)
+            .broadcast_to((-1, self.num_head, -1, -1))
             .reshape(bsz * self.num_head, 1, src_len)
         )
         xy_attn_mask = xy_attn_mask.logical_or(_xy_padding_mask)
-        new_attn_mask = torch.zeros_like(xy_attn_mask, dtype=x.dtype)
+        new_attn_mask = ops.zeros_like(xy_attn_mask, dtype=x.dtype)
         new_attn_mask.masked_fill_(xy_attn_mask, float("-inf"))
         xy_attn_mask = new_attn_mask
         # x 和完整的 y 一次性输入模型
-        xy_pos = torch.concat([x, y_pos], dim=1)
+        xy_pos = ops.concat([x, y_pos], axis=1)
 
         return xy_pos, xy_attn_mask, targets
 
-    def forward(self, x, x_lens, y, y_lens, bert_feature):
+    def construct(self, x, x_lens, y, y_lens, bert_feature):
         """
         x: phoneme_ids
         y: semantic_ids
@@ -172,8 +173,9 @@ class Text2SemanticDecoder(nn.Module):
         # loss
         # from feiteng: 每次 duration 越多, 梯度更新也应该更多, 所以用 sum
 
-        loss_1 = F.cross_entropy(logits.permute(0, 2, 1), targets, reduction="sum")
-        acc = self.ar_accuracy_metric(logits.permute(0, 2, 1).detach(), targets).item()
+        loss_1 = ops.cross_entropy(logits.permute(0, 2, 1), targets, reduction="sum")
+        #acc = self.ar_accuracy_metric(logits.permute(0, 2, 1).detach(), targets).item()等我找到可以用再更新吧
+        acc=1
 
         A_logits, R_logits = get_batch_logps(logits, reject_logits, targets, reject_targets)
         loss_2, _, _ = dpo_loss(A_logits, R_logits, 0, 0, 0.2, reference_free=True)
@@ -182,19 +184,19 @@ class Text2SemanticDecoder(nn.Module):
 
         return loss, acc
 
-    def forward_old(self, x, x_lens, y, y_lens, bert_feature):
+    def construct_old(self, x, x_lens, y, y_lens, bert_feature):
         """
         x: phoneme_ids
         y: semantic_ids
         """
         x = self.ar_text_embedding(x)
-        x = x + self.bert_proj(bert_feature.transpose(1, 2))
+        x = x + self.bert_proj(bert_feature.swapaxes(1, 2))
         x = self.ar_text_position(x)
         x_mask = make_pad_mask(x_lens)
 
         y_mask = make_pad_mask(y_lens)
-        y_mask_int = y_mask.type(torch.int64)
-        codes = y.type(torch.int64) * (1 - y_mask_int)
+        y_mask_int = y_mask.type(ms.int64)
+        codes = y.type(ms.int64) * (1 - y_mask_int)
 
         # Training
         # AR Decoder
@@ -204,35 +206,35 @@ class Text2SemanticDecoder(nn.Module):
         y_emb = self.ar_audio_embedding(y)
         y_pos = self.ar_audio_position(y_emb)
 
-        xy_padding_mask = torch.concat([x_mask, y_mask], dim=1)
+        xy_padding_mask = ops.concat([x_mask, y_mask], axis=1)
         ar_xy_padding_mask = xy_padding_mask
 
-        x_attn_mask = F.pad(
-            torch.zeros((x_len, x_len), dtype=torch.bool, device=x.device),
+        x_attn_mask = ops.pad(
+            ops.zeros((x_len, x_len), dtype=ms.bool_, ),
             (0, y_len),
             value=True,
         )
-        y_attn_mask = F.pad(
-            torch.triu(
-                torch.ones(y_len, y_len, dtype=torch.bool, device=x.device),
+        y_attn_mask = ops.pad(
+            ops.triu(
+                ops.ones((y_len, y_len), dtype=ms.bool_),
                 diagonal=1,
             ),
             (x_len, 0),
             value=False,
         )
-        xy_attn_mask = torch.concat([x_attn_mask, y_attn_mask], dim=0)
+        xy_attn_mask = ops.concat([x_attn_mask, y_attn_mask], axis=0)
         bsz, src_len = x.shape[0], x_len + y_len
         _xy_padding_mask = (
             ar_xy_padding_mask.view(bsz, 1, 1, src_len)
-            .expand(-1, self.num_head, -1, -1)
+            .broadcast_to((-1, self.num_head, -1, -1))
             .reshape(bsz * self.num_head, 1, src_len)
         )
         xy_attn_mask = xy_attn_mask.logical_or(_xy_padding_mask)
-        new_attn_mask = torch.zeros_like(xy_attn_mask, dtype=x.dtype)
+        new_attn_mask = ops.zeros_like(xy_attn_mask, dtype=x.dtype)
         new_attn_mask.masked_fill_(xy_attn_mask, float("-inf"))
         xy_attn_mask = new_attn_mask
         # x 和完整的 y 一次性输入模型
-        xy_pos = torch.concat([x, y_pos], dim=1)
+        xy_pos = ops.concat([x, y_pos], axis=1)
         xy_dec, _ = self.h(
             (xy_pos, None),
             mask=xy_attn_mask,
@@ -240,8 +242,9 @@ class Text2SemanticDecoder(nn.Module):
         logits = self.ar_predict_layer(xy_dec[:, x_len:]).permute(0, 2, 1)
         # loss
         # from feiteng: 每次 duration 越多, 梯度更新也应该更多, 所以用 sum
-        loss = F.cross_entropy(logits, targets, reduction="sum")
-        acc = self.ar_accuracy_metric(logits.detach(), targets).item()
+        loss = ops.cross_entropy(logits, targets, reduction="sum")
+        #acc = self.ar_accuracy_metric(logits.detach(), targets).item()
+        acc=1
         return loss, acc
 
     # 需要看下这个函数和 forward 的区别以及没有 semantic 的时候 prompts 输入什么
@@ -256,34 +259,32 @@ class Text2SemanticDecoder(nn.Module):
         temperature: float = 1.0,
     ):
         x = self.ar_text_embedding(x)
-        x = x + self.bert_proj(bert_feature.transpose(1, 2))
+        x = x + self.bert_proj(bert_feature.swapaxes(1, 2))
         x = self.ar_text_position(x)
 
         # AR Decoder
         y = prompts
         prefix_len = y.shape[1]
         x_len = x.shape[1]
-        x_attn_mask = torch.zeros((x_len, x_len), dtype=torch.bool)
+        x_attn_mask = ops.zeros((x_len, x_len), dtype=ops.bool_)
         stop = False
         for _ in tqdm(range(1500)):
             y_emb = self.ar_audio_embedding(y)
             y_pos = self.ar_audio_position(y_emb)
             # x 和逐渐增长的 y 一起输入给模型
-            xy_pos = torch.concat([x, y_pos], dim=1)
+            xy_pos = ops.concat([x, y_pos], axis=1)
             y_len = y.shape[1]
-            x_attn_mask_pad = F.pad(
+            x_attn_mask_pad = ops.pad(
                 x_attn_mask,
                 (0, y_len),
                 value=True,
             )
-            y_attn_mask = F.pad(
-                torch.triu(torch.ones(y_len, y_len, dtype=torch.bool), diagonal=1),
+            y_attn_mask = ops.pad(
+                ops.triu(ops.ones((y_len, y_len), dtype=ms.bool_), diagonal=1),
                 (x_len, 0),
                 value=False,
             )
-            xy_attn_mask = torch.concat([x_attn_mask_pad, y_attn_mask], dim=0).to(
-                y.device
-            )
+            xy_attn_mask = ops.concat([x_attn_mask_pad, y_attn_mask], axis=0)
 
             xy_dec, _ = self.h(
                 (xy_pos, None),
@@ -298,12 +299,12 @@ class Text2SemanticDecoder(nn.Module):
                 print("use early stop num:", early_stop_num)
                 stop = True
 
-            if torch.argmax(logits, dim=-1)[0] == self.EOS or samples[0, 0] == self.EOS:
+            if ops.argmax(logits, dim=-1)[0] == self.EOS or samples[0, 0] == self.EOS:
                 # print(torch.argmax(logits, dim=-1)[0] == self.EOS, samples[0, 0] == self.EOS)
                 stop = True
             if stop:
                 if prompts.shape[1] == y.shape[1]:
-                    y = torch.concat([y, torch.zeros_like(samples)], dim=1)
+                    y = ops.concat([y, ops.zeros(samples.shape)], axis=1)
                     print("bad zero prediction")
                 print(f"T2S Decoding EOS [{prefix_len} -> {y.shape[1]}]")
                 break
@@ -311,11 +312,11 @@ class Text2SemanticDecoder(nn.Module):
             # print(samples.shape)#[1,1]#第一个1是bs
             # import os
             # os._exit(2333)
-            y = torch.concat([y, samples], dim=1)
+            y = ops.concat([y, samples], axis=1)
         return y
 
     def pad_y_eos(self, y, y_mask_int, eos_id):
-        targets = F.pad(y, (0, 1), value=0) + eos_id * F.pad(
+        targets = ops.pad(y, (0, 1), value=0) + eos_id * ops.pad(
             y_mask_int, (0, 1), value=1
         )
         # 错位
@@ -333,14 +334,14 @@ class Text2SemanticDecoder(nn.Module):
         temperature: float = 1.0,
     ):
         x = self.ar_text_embedding(x)
-        x = x + self.bert_proj(bert_feature.transpose(1, 2))
+        x = x + self.bert_proj(bert_feature.swapaxes(1, 2))
         x = self.ar_text_position(x)
 
         # AR Decoder
         y = prompts
         
         x_len = x.shape[1]
-        x_attn_mask = torch.zeros((x_len, x_len), dtype=torch.bool)
+        x_attn_mask = ops.zeros((x_len, x_len), dtype=ms.bool_)
         stop = False
         # print(1111111,self.num_layers)
         cache = {
@@ -360,7 +361,7 @@ class Text2SemanticDecoder(nn.Module):
             y_len = y_emb.shape[1]
             prefix_len = y.shape[1]
             y_pos = self.ar_audio_position(y_emb)
-            xy_pos = torch.concat([x, y_pos], dim=1)
+            xy_pos = ops.concat([x, y_pos], axis=1)
             cache["y_emb"] = y_emb
             ref_free = False
         else:
@@ -369,22 +370,20 @@ class Text2SemanticDecoder(nn.Module):
             prefix_len = 0
             y_pos = None
             xy_pos = x
-            y = torch.zeros(x.shape[0], 0, dtype=torch.int, device=x.device)
+            y = ops.zeros((x.shape[0], 0), dtype=ms.int32)
             ref_free = True
 
-        x_attn_mask_pad = F.pad(
+        x_attn_mask_pad = ops.pad(
                     x_attn_mask,
                     (0, y_len),  ###xx的纯0扩展到xx纯0+xy纯1，(x,x+y)
                     value=True,
                 )
-        y_attn_mask = F.pad(  ###yy的右上1扩展到左边xy的0,(y,x+y)
-            torch.triu(torch.ones(y_len, y_len, dtype=torch.bool), diagonal=1),
+        y_attn_mask = ops.pad(  ###yy的右上1扩展到左边xy的0,(y,x+y)
+            ops.triu(ops.ones((y_len, y_len), dtype=ms.bool_), diagonal=1),
             (x_len, 0),
             value=False,
         )
-        xy_attn_mask = torch.concat([x_attn_mask_pad, y_attn_mask], dim=0).to(
-            x.device
-        )
+        xy_attn_mask = ops.concat([x_attn_mask_pad, y_attn_mask], axis=0)
         
 
         for idx in tqdm(range(1500)):
@@ -401,13 +400,13 @@ class Text2SemanticDecoder(nn.Module):
             )[0].unsqueeze(0)
             # 本次生成的 semantic_ids 和之前的 y 构成新的 y
             # print(samples.shape)#[1,1]#第一个1是bs
-            y = torch.concat([y, samples], dim=1) 
+            y = ops.concat([y, samples], axis=1) 
 
             if early_stop_num != -1 and (y.shape[1] - prefix_len) > early_stop_num:
                 print("use early stop num:", early_stop_num)
                 stop = True
 
-            if torch.argmax(logits, dim=-1)[0] == self.EOS or samples[0, 0] == self.EOS:
+            if ops.argmax(logits, dim=-1)[0] == self.EOS or samples[0, 0] == self.EOS:
                 # print(torch.argmax(logits, dim=-1)[0] == self.EOS, samples[0, 0] == self.EOS)
                 stop = True
             if stop:
@@ -415,7 +414,7 @@ class Text2SemanticDecoder(nn.Module):
                 #     y = torch.concat([y, torch.zeros_like(samples)], dim=1)
                 #     print("bad zero prediction")
                 if y.shape[1]==0:
-                    y = torch.concat([y, torch.zeros_like(samples)], dim=1)
+                    y = ops.concat([y, ops.zeros(samples.shape)], axis=1)
                     print("bad zero prediction")
                 print(f"T2S Decoding EOS [{prefix_len} -> {y.shape[1]}]")
                 break
@@ -423,8 +422,8 @@ class Text2SemanticDecoder(nn.Module):
             ####################### update next step ###################################
             cache["first_infer"] = 0
             if cache["y_emb"] is not None:
-                y_emb = torch.cat(
-                    [cache["y_emb"], self.ar_audio_embedding(y[:, -1:])], dim = 1
+                y_emb = ops.cat(
+                    [cache["y_emb"], self.ar_audio_embedding(y[:, -1:])], axis = 1
                 )
                 cache["y_emb"] = y_emb
                 y_pos = self.ar_audio_position(y_emb)
@@ -437,11 +436,11 @@ class Text2SemanticDecoder(nn.Module):
             y_len = y_pos.shape[1]
 
             ###最右边一列（是错的）
-            # xy_attn_mask=torch.ones((1, x_len+y_len), dtype=torch.bool,device=xy_pos.device)
+            # xy_attn_mask=ops.ones((1, x_len+y_len), dtype=torch.bool,device=xy_pos.device)
             # xy_attn_mask[:,-1]=False
             ###最下面一行（是对的）
-            xy_attn_mask = torch.zeros(
-                (1, x_len + y_len), dtype=torch.bool, device=xy_pos.device
+            xy_attn_mask = ops.zeros(
+                (1, x_len + y_len), dtype=ms.bool_
             )
         if ref_free:
             return y[:, :-1], 0

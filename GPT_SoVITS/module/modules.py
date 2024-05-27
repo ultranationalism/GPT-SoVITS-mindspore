@@ -5,7 +5,7 @@ from mindspore import ops,nn,Parameter
 from mindspore.common.initializer import Normal
 
 from mindspore.nn import Conv1d
-from mindnlp.modules.functional.weight_norm import remove_weight_norm, weight_norm
+from mindnlp.modules.weight_norm import remove_weight_norm, weight_norm
 
 from module import commons
 from module.commons import init_weights, get_padding
@@ -23,14 +23,12 @@ class LayerNorm(nn.Cell):
         super().__init__()
         self.channels = channels
         self.eps = eps
+        self.layer_norm = nn.LayerNorm(normalized_shape=(self.channels,),epsilon=self.eps,gamma_init='ones',beta_init='zeros')
 
-        self.gamma = Parameter(ops.ones(channels))
-        self.beta = Parameter(ops.zeros(channels))
 
     def construct(self, x):
-        layer_norm = ops.LayerNorm()
         x = x.swapaxes(1, -1)
-        x = layer_norm(x, (self.channels,), self.gamma, self.beta, self.eps)
+        x = self.layer_norm(x)
         return x.swapaxes(1, -1)
 
 
@@ -226,6 +224,8 @@ class WN(nn.Cell):
 class ResBlock1(nn.Cell):
     def __init__(self, channels, kernel_size=3, dilation=(1, 3, 5)):
         super(ResBlock1, self).__init__()
+        self.kernel_size=kernel_size
+        self.dilation=dilation
         self.convs1 = nn.CellList(
             [
                 weight_norm(
@@ -235,8 +235,8 @@ class ResBlock1(nn.Cell):
                         kernel_size,
                         1,
                         dilation=dilation[0],
-                        padding=get_padding(kernel_size, dilation[0]),
-                    )
+                    ),
+                    dim=0
                 ),
                 weight_norm(
                     Conv1d(
@@ -245,8 +245,8 @@ class ResBlock1(nn.Cell):
                         kernel_size,
                         1,
                         dilation=dilation[1],
-                        padding=get_padding(kernel_size, dilation[1]),
-                    )
+                    ),
+                    dim=0
                 ),
                 weight_norm(
                     Conv1d(
@@ -255,8 +255,8 @@ class ResBlock1(nn.Cell):
                         kernel_size,
                         1,
                         dilation=dilation[2],
-                        padding=get_padding(kernel_size, dilation[2]),
-                    )
+                    ),
+                    dim=0
                 ),
             ]
         )
@@ -271,8 +271,8 @@ class ResBlock1(nn.Cell):
                         kernel_size,
                         1,
                         dilation=1,
-                        padding=get_padding(kernel_size, 1),
                     )
+                    ,dim=0
                 ),
                 weight_norm(
                     Conv1d(
@@ -281,8 +281,8 @@ class ResBlock1(nn.Cell):
                         kernel_size,
                         1,
                         dilation=1,
-                        padding=get_padding(kernel_size, 1),
-                    )
+                    ),
+                    dim=0
                 ),
                 weight_norm(
                     Conv1d(
@@ -291,26 +291,30 @@ class ResBlock1(nn.Cell):
                         kernel_size,
                         1,
                         dilation=1,
-                        padding=get_padding(kernel_size, 1),
-                    )
+                    ),
+                    dim=0
                 ),
             ]
         )
         self.convs2.apply(init_weights)
 
     def construct(self, x, x_mask=None):
+        n=0
         for c1, c2 in zip(self.convs1, self.convs2):
             xt = ops.leaky_relu(x, LRELU_SLOPE)
             if x_mask is not None:
                 xt = xt * x_mask
+            xt=ops.pad(xt,((0, 0), (get_padding(self.kernel_size, self.dilation[n]), get_padding(self.kernel_size, self.dilation[n])), (0, 0)))
             xt = c1(xt)
             xt = ops.leaky_relu(xt, LRELU_SLOPE)
             if x_mask is not None:
                 xt = xt * x_mask
+            xt=ops.pad(xt,((0, 0), (get_padding(self.kernel_size, 1), get_padding(self.kernel_size, 1)), (0, 0)))
             xt = c2(xt)
             x = xt + x
         if x_mask is not None:
             x = x * x_mask
+        n+=1
         return x
 
     def remove_weight_norm(self):
@@ -323,6 +327,8 @@ class ResBlock1(nn.Cell):
 class ResBlock2(nn.Cell):
     def __init__(self, channels, kernel_size=3, dilation=(1, 3)):
         super(ResBlock2, self).__init__()
+        self.kernel_size=kernel_size
+        self.dilation=dilation
         self.convs = nn.CellList(
             [
                 weight_norm(
@@ -332,8 +338,8 @@ class ResBlock2(nn.Cell):
                         kernel_size,
                         1,
                         dilation=dilation[0],
-                        padding=get_padding(kernel_size, dilation[0]),
-                    )
+                    ),
+                    dim=0
                 ),
                 weight_norm(
                     Conv1d(
@@ -342,22 +348,25 @@ class ResBlock2(nn.Cell):
                         kernel_size,
                         1,
                         dilation=dilation[1],
-                        padding=get_padding(kernel_size, dilation[1]),
-                    )
+                    ),
+                    dim=0
                 ),
             ]
         )
         self.convs.apply(init_weights)
 
     def construct(self, x, x_mask=None):
+        n=0
         for c in self.convs:
             xt = ops.leaky_relu(x, LRELU_SLOPE)
             if x_mask is not None:
                 xt = xt * x_mask
+            xt=ops.pad(xt,((0, 0), (get_padding(self.kernel_size, self.dilation[n]), get_padding(self.kernel_size, self.dilation[n])), (0, 0)))
             xt = c(xt)
             x = xt + x
         if x_mask is not None:
             x = x * x_mask
+        n+=1
         return x
 
     def remove_weight_norm(self):

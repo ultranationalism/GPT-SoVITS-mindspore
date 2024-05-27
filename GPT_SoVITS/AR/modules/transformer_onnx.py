@@ -16,10 +16,10 @@ from torch import nn
 from torch import Tensor
 from torch.nn import functional as F
 
-_shape_t = Union[int, List[int], torch.Size]
+_shape_t = Union[int, List[int], ms.Tensor.shape]
 
 
-class LayerNorm(nn.Module):
+class LayerNorm(nn.Cell):
     __constants__ = ["normalized_shape", "eps", "elementwise_affine"]
     normalized_shape: Tuple[int, ...]
     eps: float
@@ -59,7 +59,7 @@ class LayerNorm(nn.Module):
             nn.init.ones_(self.weight)
             nn.init.zeros_(self.bias)
 
-    def forward(self, input: Tensor, embedding: Any = None) -> Tensor:
+    def construct(self, input: Tensor, embedding: Any = None) -> Tensor:
         if isinstance(input, tuple):
             input, embedding = input
             return (
@@ -85,7 +85,7 @@ class LayerNorm(nn.Module):
         )
 
 
-class IdentityNorm(nn.Module):
+class IdentityNorm(nn.Cell):
     def __init__(
         self,
         d_model: int,
@@ -95,7 +95,7 @@ class IdentityNorm(nn.Module):
     ) -> None:
         super(IdentityNorm, self).__init__()
 
-    def forward(self, input: Tensor, embedding: Any = None) -> Tensor:
+    def construct(self, input: Tensor, embedding: Any = None) -> Tensor:
         if isinstance(input, tuple):
             return input
 
@@ -103,7 +103,7 @@ class IdentityNorm(nn.Module):
         return input
 
 
-class TransformerEncoder(nn.Module):
+class TransformerEncoder(nn.Cell):
     r"""TransformerEncoder is a stack of N encoder layers. Users can build the
     BERT(https://arxiv.org/abs/1810.04805) model with corresponding parameters.
 
@@ -129,7 +129,7 @@ class TransformerEncoder(nn.Module):
         self.num_layers = num_layers
         self.norm = norm
 
-    def forward(
+    def construct(
         self,
         src: Tensor,
         mask: Optional[Tensor] = None,
@@ -152,7 +152,7 @@ class TransformerEncoder(nn.Module):
         return output
 
 
-class TransformerEncoderLayer(nn.Module):
+class TransformerEncoderLayer(nn.Cell):
     __constants__ = ["batch_first", "norm_first"]
     def __init__(
         self,
@@ -165,11 +165,11 @@ class TransformerEncoderLayer(nn.Module):
         norm_first: bool = False,
         device=None,
         dtype=None,
-        linear1_self_attention_cls: nn.Module = nn.Linear,
-        linear2_self_attention_cls: nn.Module = nn.Linear,
-        linear1_feedforward_cls: nn.Module = nn.Linear,
-        linear2_feedforward_cls: nn.Module = nn.Linear,
-        layer_norm_cls: nn.Module = LayerNorm,
+        linear1_self_attention_cls: nn.Cell = nn.Dense,
+        linear2_self_attention_cls: nn.Cell = nn.Dense,
+        linear1_feedforward_cls: nn.Cell = nn.Dense,
+        linear2_feedforward_cls: nn.Cell = nn.Dense,
+        layer_norm_cls: nn.Cell = LayerNorm,
         layer_norm_eps: float = 1e-5,
         adaptive_layer_norm=False,
     ) -> None:
@@ -220,7 +220,7 @@ class TransformerEncoderLayer(nn.Module):
         if not hasattr(self, "activation"):
             self.activation = F.relu
 
-    def forward(
+    def construct(
         self,
         src: Tensor,
         src_mask: Optional[Tensor] = None,
@@ -260,17 +260,17 @@ class TransformerEncoderLayer(nn.Module):
         return self.dropout2(x)
 
 
-class AdaptiveLayerNorm(nn.Module):
+class AdaptiveLayerNorm(nn.Cell):
     r"""Adaptive Layer Normalization"""
 
     def __init__(self, d_model, norm) -> None:
         super(AdaptiveLayerNorm, self).__init__()
-        self.project_layer = nn.Linear(d_model, 2 * d_model)
+        self.project_layer = nn.Dense(d_model, 2 * d_model)
         self.norm = norm
         self.d_model = d_model
         self.eps = self.norm.eps
 
-    def forward(self, input: Tensor, embedding: Tensor = None) -> Tensor:
+    def construct(self, input: Tensor, embedding: Tensor = None) -> Tensor:
         if isinstance(input, tuple):
             input, embedding = input
             weight, bias = torch.split(
@@ -289,4 +289,4 @@ class AdaptiveLayerNorm(nn.Module):
 
 
 def _get_clones(module, N):
-    return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
+    return nn.CellList([copy.deepcopy(module) for i in range(N)])

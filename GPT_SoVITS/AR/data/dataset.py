@@ -249,9 +249,9 @@ class Text2SemanticDataset(Dataset):
 
     def collate(self, examples: List[Dict]) -> Dict:
         sample_index: List[int] = []
-        phoneme_ids: List[torch.Tensor] = []
+        phoneme_ids: List[ms.Tensor] = []
         phoneme_ids_lens: List[int] = []
-        semantic_ids: List[torch.Tensor] = []
+        semantic_ids: List[ms.Tensor] = []
         semantic_ids_lens: List[int] = []
         # return
 
@@ -266,12 +266,12 @@ class Text2SemanticDataset(Dataset):
         phoneme_ids = batch_sequences(phoneme_ids)
         semantic_ids = batch_sequences(semantic_ids, pad_value=self.PAD)
 
-        # # convert each batch to torch.tensor
-        phoneme_ids = torch.tensor(phoneme_ids)
-        semantic_ids = torch.tensor(semantic_ids)
-        phoneme_ids_lens = torch.tensor(phoneme_ids_lens)
-        semantic_ids_lens = torch.tensor(semantic_ids_lens)
-        bert_padded = torch.FloatTensor(len(examples), 1024, max(phoneme_ids_lens))
+        # # convert each batch to ms.Tensor
+        phoneme_ids = ms.Tensor(phoneme_ids)
+        semantic_ids = ms.Tensor(semantic_ids)
+        phoneme_ids_lens = ms.Tensor(phoneme_ids_lens)
+        semantic_ids_lens = ms.Tensor(semantic_ids_lens)
+        bert_padded = ms.Tensor(len(examples), 1024, max(phoneme_ids_lens))
         bert_padded.zero_()
 
         for idx, item in enumerate(examples):
@@ -282,15 +282,15 @@ class Text2SemanticDataset(Dataset):
         return {
             # List[int]
             "ids": sample_index,
-            # torch.Tensor (B, max_phoneme_length)
+            # ms.Tensor (B, max_phoneme_length)
             "phoneme_ids": phoneme_ids,
-            # torch.Tensor (B)
+            # ms.Tensor (B)
             "phoneme_ids_len": phoneme_ids_lens,
-            # torch.Tensor (B, max_semantic_ids_length)
+            # ms.Tensor (B, max_semantic_ids_length)
             "semantic_ids": semantic_ids,
-            # torch.Tensor (B)
+            # ms.Tensor (B)
             "semantic_ids_len": semantic_ids_lens,
-            # torch.Tensor (B, 1024, max_phoneme_length)
+            # ms.Tensor (B, 1024, max_phoneme_length)
             "bert_feature": bert_padded,
         }
 

@@ -7,6 +7,7 @@
 全部按日文识别
 '''
 import os, re, logging
+import json
 import LangSegment
 logging.getLogger("markdown_it").setLevel(logging.ERROR)
 logging.getLogger("urllib3").setLevel(logging.ERROR)
@@ -16,7 +17,9 @@ logging.getLogger("asyncio").setLevel(logging.ERROR)
 logging.getLogger("charset_normalizer").setLevel(logging.ERROR)
 logging.getLogger("torchaudio._extension").setLevel(logging.ERROR)
 import pdb
-import torch
+import mindspore as ms
+from mindspore import ops
+import mindnlp
 
 if os.path.exists("./gweight.txt"):
     with open("./gweight.txt", 'r', encoding="utf-8") as file:
@@ -32,7 +35,7 @@ if os.path.exists("./sweight.txt"):
         sweight_data = file.read()
         sovits_path = os.environ.get("sovits_path", sweight_data)
 else:
-    sovits_path = os.environ.get("sovits_path", "GPT_SoVITS/pretrained_models/s2G488k.pth")
+    sovits_path = os.environ.get("sovits_path", "GPT_SoVITS/pretrained_models/s2G488k.ckpt")
 # gpt_path = os.environ.get(
 #     "gpt_path", "pretrained_models/s1bert25hz-2kh-longer-epoch=68e-step=50232.ckpt"
 # )
@@ -49,9 +52,9 @@ is_share = os.environ.get("is_share", "False")
 is_share = eval(is_share)
 if "_CUDA_VISIBLE_DEVICES" in os.environ:
     os.environ["CUDA_VISIBLE_DEVICES"] = os.environ["_CUDA_VISIBLE_DEVICES"]
-is_half = eval(os.environ.get("is_half", "True")) and torch.cuda.is_available()
+is_half = eval(os.environ.get("is_half", "True"))
 import gradio as gr
-from transformers import AutoModelForMaskedLM, AutoTokenizer
+from mindnlp.transformers import AutoModelForMaskedLM, AutoTokenizer
 import numpy as np
 import librosa
 from feature_extractor import cnhubert
@@ -59,7 +62,7 @@ from feature_extractor import cnhubert
 cnhubert.cnhubert_base_path = cnhubert_base_path
 
 from module.models import SynthesizerTrn
-from AR.models.t2s_lightning_module import Text2SemanticLightningModule
+from AR.models.t2s_model import Text2SemanticDecoder
 from text import cleaned_text_to_sequence
 from text.cleaner import clean_text
 from time import time as ttime
@@ -71,32 +74,27 @@ i18n = I18nAuto()
 
 # os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'  # 确保直接启动推理UI时也能够设置。
 
-if torch.cuda.is_available():
-    device = "cuda"
-else:
-    device = "cpu"
 
 tokenizer = AutoTokenizer.from_pretrained(bert_path)
 bert_model = AutoModelForMaskedLM.from_pretrained(bert_path)
 if is_half == True:
-    bert_model = bert_model.half().to(device)
+    bert_model = bert_model.half()
 else:
-    bert_model = bert_model.to(device)
+    bert_model = bert_model
 
 
 def get_bert_feature(text, word2ph):
-    with torch.no_grad():
-        inputs = tokenizer(text, return_tensors="pt")
-        for i in inputs:
-            inputs[i] = inputs[i].to(device)
-        res = bert_model(**inputs, output_hidden_states=True)
-        res = torch.cat(res["hidden_states"][-3:-2], -1)[0].cpu()[1:-1]
+    inputs = ops.stop_gradient(tokenizer(text, return_tensors="pt"))
+    for i in inputs:
+        inputs[i] = inputs[i]
+    res = bert_model(**inputs, output_hidden_states=True)
+    res = ops.cat(res["hidden_states"][-3:-2], -1)[0][1:-1]
     assert len(word2ph) == len(text)
     phone_level_feature = []
     for i in range(len(word2ph)):
         repeat_feature = res[i].repeat(word2ph[i], 1)
         phone_level_feature.append(repeat_feature)
-    phone_level_feature = torch.cat(phone_level_feature, dim=0)
+    phone_level_feature = ops.cat(phone_level_feature, axis=0)
     return phone_level_feature.T
 
 
@@ -130,15 +128,15 @@ class DictToAttrRecursive(dict):
 
 ssl_model = cnhubert.get_model()
 if is_half == True:
-    ssl_model = ssl_model.half().to(device)
+    ssl_model = ssl_model.half()
 else:
-    ssl_model = ssl_model.to(device)
+    ssl_model = ssl_model
 
 
 def change_sovits_weights(sovits_path):
     global vq_model, hps
-    dict_s2 = torch.load(sovits_path, map_location="cpu")
-    hps = dict_s2["config"]
+    dict_s2 = ms.load_checkpoint(sovits_path)
+    hps = json.loads(dict_s2["config"])
     hps = DictToAttrRecursive(hps)
     hps.model.semantic_frame_rate = "25hz"
     vq_model = SynthesizerTrn(
@@ -150,11 +148,12 @@ def change_sovits_weights(sovits_path):
     if ("pretrained" not in sovits_path):
         del vq_model.enc_q
     if is_half == True:
-        vq_model = vq_model.half().to(device)
+        vq_model = vq_model.half()
     else:
-        vq_model = vq_model.to(device)
-    vq_model.eval()
-    print(vq_model.load_state_dict(dict_s2["weight"], strict=False))
+        vq_model = vq_model
+    vq_model.set_train(False)
+    #vq_model.load_state_dict(dict_s2["weight"], strict=False)
+    ms.load_param_into_net(vq_model,dict_s2 )
     with open("./sweight.txt", "w", encoding="utf-8") as f:
         f.write(sovits_path)
 
@@ -165,14 +164,15 @@ change_sovits_weights(sovits_path)
 def change_gpt_weights(gpt_path):
     global hz, max_sec, t2s_model, config
     hz = 50
-    dict_s1 = torch.load(gpt_path, map_location="cpu")
+    dict_s1 = ms.load_checkpoint(gpt_path, )
     config = dict_s1["config"]
     max_sec = config["data"]["max_sec"]
-    t2s_model = Text2SemanticLightningModule(config, "****", is_train=False)
-    t2s_model.load_state_dict(dict_s1["weight"])
+    t2s_model = Text2SemanticDecoder(config, top_k=3)
+    load_param_into_net()
+    #t2s_model.load_state_dict(dict_s1["weight"])
     if is_half == True:
         t2s_model = t2s_model.half()
-    t2s_model = t2s_model.to(device)
+    t2s_model = t2s_model
     t2s_model.eval()
     total = sum([param.nelement() for param in t2s_model.parameters()])
     print("Number of parameter: %.2fM" % (total / 1e6))
@@ -184,7 +184,7 @@ change_gpt_weights(gpt_path)
 
 def get_spepc(hps, filename):
     audio = load_audio(filename, int(hps.data.sampling_rate))
-    audio = torch.FloatTensor(audio)
+    audio = ms.Tensor(audio)
     audio_norm = audio
     audio_norm = audio_norm.unsqueeze(0)
     spec = spectrogram_torch(
@@ -213,16 +213,16 @@ def clean_text_inf(text, language):
     phones = cleaned_text_to_sequence(phones)
     return phones, word2ph, norm_text
 
-dtype=torch.float16 if is_half == True else torch.float32
+dtype=ms.float16 if is_half == True else ms.float32
 def get_bert_inf(phones, word2ph, norm_text, language):
     language=language.replace("all_","")
     if language == "zh":
-        bert = get_bert_feature(norm_text, word2ph).to(device)#.to(dtype)
+        bert = get_bert_feature(norm_text, word2ph)#.to(dtype)
     else:
-        bert = torch.zeros(
+        bert = ops.zeros(
             (1024, len(phones)),
-            dtype=torch.float16 if is_half == True else torch.float32,
-        ).to(device)
+            dtype=ms.float16 if is_half == True else ms.float32,
+        )
 
     return bert
 
@@ -249,12 +249,12 @@ def get_phones_and_bert(text,language):
             formattext = formattext.replace("  ", " ")
         phones, word2ph, norm_text = clean_text_inf(formattext, language)
         if language == "zh":
-            bert = get_bert_feature(norm_text, word2ph).to(device)
+            bert = get_bert_feature(norm_text, word2ph)
         else:
-            bert = torch.zeros(
+            bert = ops.zeros(
                 (1024, len(phones)),
-                dtype=torch.float16 if is_half == True else torch.float32,
-            ).to(device)
+                dtype=ms.float16 if is_half == True else ms.float32,
+            )
     elif language in {"zh", "ja","auto"}:
         textlist=[]
         langlist=[]
@@ -287,7 +287,7 @@ def get_phones_and_bert(text,language):
             phones_list.append(phones)
             norm_text_list.append(norm_text)
             bert_list.append(bert)
-        bert = torch.cat(bert_list, dim=1)
+        bert = ops.cat(bert_list, axis=1)
         phones = sum(phones_list, [])
         norm_text = ''.join(norm_text_list)
 
@@ -329,27 +329,26 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
         int(hps.data.sampling_rate * 0.3),
         dtype=np.float16 if is_half == True else np.float32,
     )
-    with torch.no_grad():
-        wav16k, sr = librosa.load(ref_wav_path, sr=16000)
-        if (wav16k.shape[0] > 160000 or wav16k.shape[0] < 48000):
-            raise OSError(i18n("参考音频在3~10秒范围外，请更换！"))
-        wav16k = torch.from_numpy(wav16k)
-        zero_wav_torch = torch.from_numpy(zero_wav)
-        if is_half == True:
-            wav16k = wav16k.half().to(device)
-            zero_wav_torch = zero_wav_torch.half().to(device)
-        else:
-            wav16k = wav16k.to(device)
-            zero_wav_torch = zero_wav_torch.to(device)
-        wav16k = torch.cat([wav16k, zero_wav_torch])
-        ssl_content = ssl_model.model(wav16k.unsqueeze(0))[
-            "last_hidden_state"
-        ].transpose(
-            1, 2
-        )  # .float()
-        codes = vq_model.extract_latent(ssl_content)
-   
-        prompt_semantic = codes[0, 0]
+    wav16k, sr = librosa.load(ref_wav_path, sr=16000)
+    if (wav16k.shape[0] > 160000 or wav16k.shape[0] < 48000):
+        raise OSError(i18n("参考音频在3~10秒范围外，请更换！"))
+    wav16k = ms.Tensor.from_numpy(wav16k)
+    zero_wav_torch = ms.Tensor.from_numpy(zero_wav)
+    if is_half == True:
+        wav16k = wav16k.half()
+        zero_wav_torch = zero_wav_torch.half()
+    else:
+        wav16k = wav16k
+        zero_wav_torch = zero_wav_torch
+    wav16k = ops.cat([wav16k, zero_wav_torch])
+    ssl_content = ssl_model.model(wav16k.unsqueeze(0))[
+        "last_hidden_state"
+    ].transpose(
+        1, 2
+    )  # .float()
+    codes = vq_model.extract_latent(ssl_content)
+
+    prompt_semantic = codes[0, 0]
     t1 = ttime()
 
     if (how_to_cut == i18n("凑四句一切")):
@@ -380,43 +379,42 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
         phones2,bert2,norm_text2=get_phones_and_bert(text, text_language)
         print(i18n("前端处理后的文本(每句):"), norm_text2)
         if not ref_free:
-            bert = torch.cat([bert1, bert2], 1)
-            all_phoneme_ids = torch.LongTensor(phones1+phones2).to(device).unsqueeze(0)
+            bert = ops.cat([bert1, bert2], 1)
+            all_phoneme_ids = ms.Tensor(phones1+phones2).unsqueeze(0)
         else:
             bert = bert2
-            all_phoneme_ids = torch.LongTensor(phones2).to(device).unsqueeze(0)
+            all_phoneme_ids = ms.Tensor(phones2).unsqueeze(0)
 
-        bert = bert.to(device).unsqueeze(0)
-        all_phoneme_len = torch.tensor([all_phoneme_ids.shape[-1]]).to(device)
-        prompt = prompt_semantic.unsqueeze(0).to(device)
+        bert = bert.unsqueeze(0)
+        all_phoneme_len = ms.Tensor([all_phoneme_ids.shape[-1]])
+        prompt = prompt_semantic.unsqueeze(0)
         t2 = ttime()
-        with torch.no_grad():
-            # pred_semantic = t2s_model.model.infer(
-            pred_semantic, idx = t2s_model.model.infer_panel(
-                all_phoneme_ids,
-                all_phoneme_len,
-                None if ref_free else prompt,
-                bert,
-                # prompt_phone_len=ph_offset,
-                top_k=top_k,
-                top_p=top_p,
-                temperature=temperature,
-                early_stop_num=hz * max_sec,
-            )
+        # pred_semantic = t2s_model.model.infer(
+        pred_semantic, idx = t2s_model.infer_panel(
+            all_phoneme_ids,
+            all_phoneme_len,
+            None if ref_free else prompt,
+            bert,
+            # prompt_phone_len=ph_offset,
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
+            early_stop_num=hz * max_sec,
+        )
         t3 = ttime()
         # print(pred_semantic.shape,idx)
         pred_semantic = pred_semantic[:, -idx:].unsqueeze(
             0
         )  # .unsqueeze(0)#mq要多unsqueeze一次
-        refer = get_spepc(hps, ref_wav_path)  # .to(device)
+        refer = get_spepc(hps, ref_wav_path)  # 
         if is_half == True:
-            refer = refer.half().to(device)
+            refer = refer.half()
         else:
-            refer = refer.to(device)
+            refer = refer
         # audio = vq_model.decode(pred_semantic, all_phoneme_ids, refer).detach().cpu().numpy()[0, 0]
         audio = (
             vq_model.decode(
-                pred_semantic, torch.LongTensor(phones2).to(device).unsqueeze(0), refer
+                pred_semantic, ms.Tensor(phones2).unsqueeze(0), refer
             )
                 .detach()
                 .cpu()

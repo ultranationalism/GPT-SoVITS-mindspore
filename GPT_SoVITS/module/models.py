@@ -10,7 +10,7 @@ from module import attentions
 from mindspore.nn import Conv1d, Conv2d
 from mindspore.nn import  Conv1dTranspose as ConvTranspose1d
 #from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
-from mindnlp.modules.functional.weight_norm import remove_weight_norm, weight_norm
+from mindnlp.modules.weight_norm import remove_weight_norm, weight_norm
 from mindnlp.amp import autocast
 from .spectral_norm import spectral_norm
 from module.commons import init_weights, get_padding
@@ -417,12 +417,13 @@ class Generator(nn.Cell):
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
         self.conv_pre = Conv1d(
-            initial_channel, upsample_initial_channel, 7, 1, padding=3
+            initial_channel, upsample_initial_channel, 7, 1
         )
         resblock = modules.ResBlock1 if resblock == "1" else modules.ResBlock2
 
         self.ups = nn.CellList()
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
+            self.padd=nn.Pad(((0, 0), ((k - u) // 2, (k - u) // 2), (0, 0)))
             self.ups.append(
                 weight_norm(
                     ConvTranspose1d(
@@ -430,8 +431,8 @@ class Generator(nn.Cell):
                         upsample_initial_channel // (2 ** (i + 1)),
                         k,
                         u,
-                        padding=(k - u) // 2,
-                    )
+                    ),
+                    dim=0
                 )
             )
 
@@ -443,19 +444,21 @@ class Generator(nn.Cell):
             ):
                 self.resblocks.append(resblock(ch, k, d))
 
-        self.conv_post = Conv1d(ch, 1, 7, 1, padding=3, has_bias=False)
+        self.conv_post = Conv1d(ch, 1, 7, 1, has_bias=False)
         self.ups.apply(init_weights)
 
         if gin_channels != 0:
             self.cond = nn.Conv1d(gin_channels, upsample_initial_channel, 1)
 
     def construct(self, x, g=None):
+        x=ops.pad(x,((0, 0), (3, 3), (0, 0)))
         x = self.conv_pre(x)
         if g is not None:
             x = x + self.cond(g)
 
         for i in range(self.num_upsamples):
             x = ops.leaky_relu(x, modules.LRELU_SLOPE)
+            x=self.padd(x)
             x = self.ups[i](x)
             xs = None
             for j in range(self.num_kernels):
@@ -465,6 +468,7 @@ class Generator(nn.Cell):
                     xs += self.resblocks[i * self.num_kernels + j](x)
             x = xs / self.num_kernels
         x = ops.leaky_relu(x)
+        x=ops.pad(x,((0, 0), (3, 3), (0, 0)))
         x = self.conv_post(x)
         x = ops.tanh(x)
 
@@ -690,7 +694,7 @@ class Quantizer_module(nn.Cell):
         return z_q, min_indicies
 
 
-class Quantizer(qnn.Cell):
+class Quantizer(nn.Cell):
     def __init__(self, embed_dim=512, n_code_groups=4, n_codes=160):
         super(Quantizer, self).__init__()
         assert embed_dim % n_code_groups == 0

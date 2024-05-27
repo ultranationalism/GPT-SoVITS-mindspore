@@ -7,7 +7,7 @@ from mindspore import nn,ops,Parameter
 
 from module import commons
 from module.modules import LayerNorm
-from mindnlp.modules.functional.weight_norm import remove_weight_norm, weight_norm
+from mindnlp.modules.weight_norm import remove_weight_norm, weight_norm
 
 
 class Encoder(nn.Cell):
@@ -205,9 +205,9 @@ class MultiHeadAttention(nn.Cell):
         self.attn = None
 
         self.k_channels = channels // n_heads
-        self.conv_q = nn.Conv1d(channels, channels, 1, weight_init="XavierUniform", bias_init="XavierUniform")
-        self.conv_k = nn.Conv1d(channels, channels, 1, weight_init="XavierUniform", bias_init="XavierUniform")
-        self.conv_v = nn.Conv1d(channels, channels, 1, weight_init="XavierUniform", bias_init="XavierUniform")
+        self.conv_q = nn.Conv1d(channels, channels, 1)
+        self.conv_k = nn.Conv1d(channels, channels, 1 )
+        self.conv_v = nn.Conv1d(channels, channels, 1 )
         self.conv_o = nn.Conv1d(channels, out_channels, 1)
         self.drop = nn.Dropout(p=p_dropout)
 

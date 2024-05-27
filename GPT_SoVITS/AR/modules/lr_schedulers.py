@@ -2,13 +2,13 @@
 # reference: https://github.com/lifeiteng/vall-e
 import math
 
-import torch
+import mindspore as ms
 from matplotlib import pyplot as plt
-from torch import nn
-from torch.optim import Adam
+from mindspore import nn,ops
+from mindspore.experimental.optim import Adam
 
 
-class WarmupCosineLRSchedule(torch.optim.lr_scheduler._LRScheduler):
+class WarmupCosineLRSchedule(ms.experimental.optim.lr_scheduler.LRScheduler):
     """
     Implements Warmup learning rate schedule until 'warmup_steps', going from 'init_lr' to 'peak_lr' for multiple optimizers.
     """
@@ -67,7 +67,7 @@ class WarmupCosineLRSchedule(torch.optim.lr_scheduler._LRScheduler):
 
 
 if __name__ == "__main__":
-    m = nn.Linear(10, 10)
+    m = nn.Dense(10, 10)
     opt = Adam(m.parameters(), lr=1e-4)
     s = WarmupCosineLRSchedule(
         opt, 1e-6, 2e-4, 1e-6, warmup_steps=2000, total_steps=20000, current_step=0

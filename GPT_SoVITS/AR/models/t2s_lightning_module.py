@@ -99,7 +99,7 @@ class Text2SemanticLightningModule(LightningModule):
     #     sync_dist=True)
     #
     # # get infer output
-    # semantic_len = batch['semantic_ids'].size(1)
+    # semantic_len = batch['semantic_ids'].shape(1)
     # prompt_len = min(int(semantic_len * 0.5), 150)
     # prompt = batch['semantic_ids'][:, :prompt_len]
     # pred_semantic = self.model.infer(batch['phoneme_ids'],
@@ -109,7 +109,7 @@ class Text2SemanticLightningModule(LightningModule):
     # save_name = f'semantic_toks_{batch_idx}.pt'
     # save_path = os.path.join(self.eval_dir, save_name)
     # torch.save(pred_semantic.detach().cpu(), save_path)
-
+"""
     def configure_optimizers(self):
         model_parameters = self.model.parameters()
         parameters_names = []
@@ -139,3 +139,4 @@ class Text2SemanticLightningModule(LightningModule):
                 )
             },
         }
+"""

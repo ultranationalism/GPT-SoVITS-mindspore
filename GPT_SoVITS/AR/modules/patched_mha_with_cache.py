@@ -7,7 +7,7 @@ from torch.nn.functional import (
 )
 from torch.nn import functional as F
 import torch
-# Tensor = torch.Tensor
+# Tensor = ms.Tensor
 # from typing import Callable, List, Optional, Tuple, Union
 
 
@@ -214,7 +214,7 @@ def multi_head_attention_forward_patched(
     assert (
         embed_dim == embed_dim_to_check
     ), f"was expecting embedding dimension of {embed_dim_to_check}, but got {embed_dim}"
-    if isinstance(embed_dim, torch.Tensor):
+    if isinstance(embed_dim, ms.Tensor):
         # embed_dim can be a tensor when JIT tracing
         head_dim = embed_dim.div(num_heads, rounding_mode="trunc")
     else:
@@ -272,10 +272,10 @@ def multi_head_attention_forward_patched(
             cache["v"][cache["stage"]] = v
         else:  ###12个layer每个都要留自己的cache_kv
             # print(1,cache["k"].shape)
-            cache["k"][cache["stage"]] = torch.cat(
+            cache["k"][cache["stage"]] = ops.cat(
                 [cache["k"][cache["stage"]], k], 0
             )  ##本来时序是1，但是proj的时候可能transpose了所以时序到0维了
-            cache["v"][cache["stage"]] = torch.cat([cache["v"][cache["stage"]], v], 0)
+            cache["v"][cache["stage"]] = ops.cat([cache["v"][cache["stage"]], v], 0)
             # print(2, cache["k"].shape)
             src_len = cache["k"][cache["stage"]].shape[0]
             k = cache["k"][cache["stage"]]
@@ -298,14 +298,14 @@ def multi_head_attention_forward_patched(
 
     if attn_mask is not None:
         # ensure attn_mask's dim is 3
-        if attn_mask.dim() == 2:
+        if attn_mask.ndimension() == 2:
             correct_2d_size = (tgt_len, src_len)
             if attn_mask.shape != correct_2d_size:
                 raise RuntimeError(
                     f"The shape of the 2D attn_mask is {attn_mask.shape}, but should be {correct_2d_size}."
                 )
             attn_mask = attn_mask.unsqueeze(0)
-        elif attn_mask.dim() == 3:
+        elif attn_mask.ndimension() == 3:
             correct_3d_size = (bsz * num_heads, tgt_len, src_len)
             if attn_mask.shape != correct_3d_size:
                 raise RuntimeError(
@@ -313,15 +313,15 @@ def multi_head_attention_forward_patched(
                 )
         else:
             raise RuntimeError(
-                f"attn_mask's dimension {attn_mask.dim()} is not supported"
+                f"attn_mask's dimension {attn_mask.ndimension()} is not supported"
             )
 
     # add bias along batch dimension (currently second)
     if bias_k is not None and bias_v is not None:
         assert static_k is None, "bias cannot be added to static key."
         assert static_v is None, "bias cannot be added to static value."
-        k = torch.cat([k, bias_k.repeat(1, bsz, 1)])
-        v = torch.cat([v, bias_v.repeat(1, bsz, 1)])
+        k = ops.cat([k, bias_k.repeat(1, bsz, 1)])
+        v = ops.cat([v, bias_v.repeat(1, bsz, 1)])
         if attn_mask is not None:
             attn_mask = pad(attn_mask, (0, 1))
         if key_padding_mask is not None:
@@ -333,38 +333,38 @@ def multi_head_attention_forward_patched(
     #
     # reshape q, k, v for multihead attention and make em batch first
     #
-    q = q.view(tgt_len, bsz * num_heads, head_dim).transpose(0, 1)
+    q = q.view(tgt_len, bsz * num_heads, head_dim).swapaxes(0, 1)
     if static_k is None:
-        k = k.view(k.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
+        k = k.view(k.shape[0], bsz * num_heads, head_dim).swapaxes(0, 1)
     else:
         # TODO finish disentangling control flow so we don't do in-projections when statics are passed
         assert (
-            static_k.size(0) == bsz * num_heads
-        ), f"expecting static_k.size(0) of {bsz * num_heads}, but got {static_k.size(0)}"
+            static_k.shape(0) == bsz * num_heads
+        ), f"expecting static_k.shape(0) of {bsz * num_heads}, but got {static_k.shape(0)}"
         assert (
-            static_k.size(2) == head_dim
-        ), f"expecting static_k.size(2) of {head_dim}, but got {static_k.size(2)}"
+            static_k.shape(2) == head_dim
+        ), f"expecting static_k.shape(2) of {head_dim}, but got {static_k.shape(2)}"
         k = static_k
     if static_v is None:
-        v = v.view(v.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
+        v = v.view(v.shape[0], bsz * num_heads, head_dim).swapaxes(0, 1)
     else:
         # TODO finish disentangling control flow so we don't do in-projections when statics are passed
         assert (
-            static_v.size(0) == bsz * num_heads
-        ), f"expecting static_v.size(0) of {bsz * num_heads}, but got {static_v.size(0)}"
+            static_v.shape(0) == bsz * num_heads
+        ), f"expecting static_v.shape(0) of {bsz * num_heads}, but got {static_v.shape(0)}"
         assert (
-            static_v.size(2) == head_dim
-        ), f"expecting static_v.size(2) of {head_dim}, but got {static_v.size(2)}"
+            static_v.shape(2) == head_dim
+        ), f"expecting static_v.shape(2) of {head_dim}, but got {static_v.shape(2)}"
         v = static_v
 
     # add zero attention along batch dimension (now first)
     if add_zero_attn:
         zero_attn_shape = (bsz * num_heads, 1, head_dim)
-        k = torch.cat(
-            [k, torch.zeros(zero_attn_shape, dtype=k.dtype, device=k.device)], dim=1
+        k = ops.cat(
+            [k, ops.zeros(zero_attn_shape, dtype=k.dtype, device=k.device)], dim=1
         )
-        v = torch.cat(
-            [v, torch.zeros(zero_attn_shape, dtype=v.dtype, device=v.device)], dim=1
+        v = ops.cat(
+            [v, ops.zeros(zero_attn_shape, dtype=v.dtype, device=v.device)], dim=1
         )
         if attn_mask is not None:
             attn_mask = pad(attn_mask, (0, 1))
@@ -372,7 +372,7 @@ def multi_head_attention_forward_patched(
             key_padding_mask = pad(key_padding_mask, (0, 1))
 
     # update source sequence length after adjustments
-    src_len = k.size(1)
+    src_len = k.shape(1)
 
     # merge key padding and attention masks
     if key_padding_mask is not None:
@@ -382,7 +382,7 @@ def multi_head_attention_forward_patched(
         ), f"expecting key_padding_mask shape of {(bsz, src_len)}, but got {key_padding_mask.shape}"
         key_padding_mask = (
             key_padding_mask.view(bsz, 1, 1, src_len)
-            .expand(-1, num_heads, -1, -1)
+            .broadcast_to((-1, num_heads, -1, -1))
             .reshape(bsz * num_heads, 1, src_len)
         )
         if attn_mask is None:
@@ -408,10 +408,10 @@ def multi_head_attention_forward_patched(
 
         if attn_mask is not None:
             attn_output_weights = torch.baddbmm(
-                attn_mask, q_scaled, k.transpose(-2, -1)
+                attn_mask, q_scaled, k.swapaxes(-2, -1)
             )
         else:
-            attn_output_weights = torch.bmm(q_scaled, k.transpose(-2, -1))
+            attn_output_weights = torch.bmm(q_scaled, k.swapaxes(-2, -1))
         attn_output_weights = softmax(attn_output_weights, dim=-1)
         if dropout_p > 0.0:
             attn_output_weights = dropout(attn_output_weights, p=dropout_p)
@@ -419,10 +419,10 @@ def multi_head_attention_forward_patched(
         attn_output = torch.bmm(attn_output_weights, v)
 
         attn_output = (
-            attn_output.transpose(0, 1).contiguous().view(tgt_len * bsz, embed_dim)
+            attn_output.swapaxes(0, 1).contiguous().view(tgt_len * bsz, embed_dim)
         )
         attn_output = linear(attn_output, out_proj_weight, out_proj_bias)
-        attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
+        attn_output = attn_output.view(tgt_len, bsz, attn_output.shape(1))
 
         # optionally average attention weights over heads
         attn_output_weights = attn_output_weights.view(bsz, num_heads, tgt_len, src_len)
@@ -439,7 +439,7 @@ def multi_head_attention_forward_patched(
         # if attn_mask's shape is (1, L, S) we need to unsqueeze to (1, 1, L, S)
         # in order to match the input for SDPA of (N, num_heads, L, S)
         if attn_mask is not None:
-            if attn_mask.size(0) == 1 and attn_mask.dim() == 3:
+            if attn_mask.shape(0) == 1 and attn_mask.ndimension() == 3:
                 attn_mask = attn_mask.unsqueeze(0)
             else:
                 attn_mask = attn_mask.view(bsz, num_heads, -1, src_len)
@@ -458,7 +458,7 @@ def multi_head_attention_forward_patched(
         )
 
         attn_output = linear(attn_output, out_proj_weight, out_proj_bias)
-        attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
+        attn_output = attn_output.view(tgt_len, bsz, attn_output.shape(1))
         if not is_batched:
             # squeeze the output if input was unbatched
             attn_output = attn_output.squeeze(1)

@@ -1,5 +1,4 @@
-import torch
-
+import mindspore
 
 def get_model():
     import whisper
@@ -21,5 +20,5 @@ def get_content(model=None, wav_16k_tensor=None):
     with torch.no_grad():
         feature = model(pad_or_trim(mel, 3000).unsqueeze(0))[
             :1, :feature_len, :
-        ].transpose(1, 2)
+        ].swapaxes(1, 2)
     return feature

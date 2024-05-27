@@ -4,7 +4,7 @@ import torch
 from typeguard import check_argument_types
 
 
-def initialize(model: torch.nn.Module, init: str):
+def initialize(model: torch.nn.Cell, init: str):
     """Initialize weights of a neural network module.
 
     Parameters are initialized using the given method or distribution.
@@ -21,7 +21,7 @@ def initialize(model: torch.nn.Module, init: str):
 
     # weight init
     for p in model.parameters():
-        if p.dim() > 1:
+        if p.ndimension() > 1:
             if init == "xavier_uniform":
                 torch.nn.init.xavier_uniform_(p.data)
             elif init == "xavier_normal":
@@ -34,5 +34,5 @@ def initialize(model: torch.nn.Module, init: str):
                 raise ValueError("Unknown initialization: " + init)
     # bias init
     for name, p in model.named_parameters():
-        if ".bias" in name and p.dim() == 1:
+        if ".bias" in name and p.ndimension() == 1:
             p.data.zero_()

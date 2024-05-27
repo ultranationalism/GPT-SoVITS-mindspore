@@ -20,12 +20,10 @@ from typing import Optional
 from typing import Tuple
 from typing import Union
 
-import torch
-import torch.nn as nn
-from torch import Tensor
+import  mindspore as ms
+from mindspore import nn,Tensor,ops
 
-
-class DoubleSwishFunction(torch.autograd.Function):
+class DoubleSwishFunction(nn.Cell):
     """
       double_swish(x) = x * torch.sigmoid(x-1)
     This is a definition, originally motivated by its close numerical
@@ -41,14 +39,13 @@ class DoubleSwishFunction(torch.autograd.Function):
      ... so we just need to remember s(x) but not x itself.
     """
 
-    @staticmethod
-    def forward(ctx, x: Tensor) -> Tensor:
+    def construct(ctx, x: Tensor) -> Tensor:
         requires_grad = x.requires_grad
         x_dtype = x.dtype
-        if x.dtype == torch.float16:
-            x = x.to(torch.float32)
+        if x.dtype == ms.float16:
+            x = x.to(ms.float32)
 
-        s = torch.sigmoid(x - 1.0)
+        s = ops.sigmoid(x - 1.0)
         y = x * s
 
         if requires_grad:
@@ -61,21 +58,20 @@ class DoubleSwishFunction(torch.autograd.Function):
             # floors), should be expectation-preserving.
             floor = -0.043637
             ceil = 1.2
-            d_scaled = (deriv - floor) * (255.0 / (ceil - floor)) + torch.rand_like(
+            d_scaled = (deriv - floor) * (255.0 / (ceil - floor)) + ops.rand_like(
                 deriv
             )
             if __name__ == "__main__":
                 # for self-testing only.
                 assert d_scaled.min() >= 0.0
                 assert d_scaled.max() < 256.0
-            d_int = d_scaled.to(torch.uint8)
+            d_int = d_scaled.to(ms.uint8)
             ctx.save_for_backward(d_int)
-        if x.dtype == torch.float16 or torch.is_autocast_enabled():
-            y = y.to(torch.float16)
+        if x.dtype == ms.float16:
+            y = y.to(ms.float16)
         return y
 
-    @staticmethod
-    def backward(ctx, y_grad: Tensor) -> Tensor:
+    def bprop(ctx, y_grad: Tensor) -> Tensor:
         (d,) = ctx.saved_tensors
         # the same constants as used in forward pass.
         floor = -0.043637
@@ -83,21 +79,51 @@ class DoubleSwishFunction(torch.autograd.Function):
         d = d * ((ceil - floor) / 255.0) + floor
         return y_grad * d
 
-
-class DoubleSwish(torch.nn.Module):
-    def forward(self, x: Tensor) -> Tensor:
+class DoubleSwish(nn.Cell):
+    tmp=None
+    def construct(self, x: Tensor) -> Tensor:
         """Return double-swish activation function which is an approximation to Swish(Swish(x)),
         that we approximate closely with x * sigmoid(x-1).
         """
-        if torch.jit.is_scripting() or torch.jit.is_tracing():
-            return x * torch.sigmoid(x - 1.0)
-        return DoubleSwishFunction.apply(x)
+        requires_grad = x.requires_grad
+        x_dtype = x.dtype
+        if x.dtype == ms.float16:
+            x = x.to(ms.float32)
+
+        s = ops.sigmoid(x - 1.0)
+        y = x * s
+
+        if requires_grad:
+            deriv = y * (1 - s) + s
+            # notes on derivative of x * sigmoid(x - 1):
+            # https://www.wolframalpha.com/input?i=d%2Fdx+%28x+*+sigmoid%28x-1%29%29
+            # min \simeq -0.043638.  Take floor as -0.043637 so it's a lower bund
+            # max \simeq 1.1990.   Take ceil to be 1.2 so it's an upper bound.
+            # the combination of "+ torch.rand_like(deriv)" and casting to torch.uint8 (which
+            # floors), should be expectation-preserving.
+            floor = -0.043637
+            ceil = 1.2
+            d_scaled = (deriv - floor) * (255.0 / (ceil - floor)) + ops.rand_like(
+                deriv
+            )
+            d_int = d_scaled.to(ms.uint8)
+            self.tmp=d_int
+        if x.dtype == ms.float16:
+            y = y.to(ms.float16)
+        return y
+    def bprop(self,x,out,dout: Tensor) -> Tensor:
+        (d,) = self.tmp
+        # the same constants as used in forward pass.
+        floor = -0.043637
+        ceil = 1.2
+        d = d * ((ceil - floor) / 255.0) + floor
+        return dout * d
 
 
-class ActivationBalancerFunction(torch.autograd.Function):
-    @staticmethod
-    def forward(
-        ctx,
+class ActivationBalancerFunction(nn.Cell):
+    tmp=None
+    def construct(
+        self,
         x: Tensor,
         scale_factor: Tensor,
         sign_factor: Optional[Tensor],
@@ -105,30 +131,36 @@ class ActivationBalancerFunction(torch.autograd.Function):
     ) -> Tensor:
         if channel_dim < 0:
             channel_dim += x.ndim
-        ctx.channel_dim = channel_dim
         xgt0 = x > 0
         if sign_factor is None:
-            ctx.save_for_backward(xgt0, scale_factor)
+            self.tmp=(xgt0, scale_factor)
         else:
-            ctx.save_for_backward(xgt0, scale_factor, sign_factor)
+            self.tmp=(xgt0, scale_factor, sign_factor)
         return x
 
-    @staticmethod
-    def backward(ctx, x_grad: Tensor) -> Tuple[Tensor, None, None, None]:
-        if len(ctx.saved_tensors) == 3:
-            xgt0, scale_factor, sign_factor = ctx.saved_tensors
-            for _ in range(ctx.channel_dim, x_grad.ndim - 1):
+    def backward(
+        self, 
+        x: Tensor,
+        scale_factor: Tensor,
+        sign_factor: Optional[Tensor],
+        channel_dim: int,
+        out,
+        dout
+    ):
+        if len(self.tmp) == 3:
+            xgt0, scale_factor, sign_factor = self.tmp
+            for _ in range(channel_dim, dout.ndim - 1):
                 scale_factor = scale_factor.unsqueeze(-1)
                 sign_factor = sign_factor.unsqueeze(-1)
-            factor = sign_factor + scale_factor * (xgt0.to(x_grad.dtype) - 0.5)
+            factor = sign_factor + scale_factor * (xgt0.to(dout.dtype) - 0.5)
         else:
-            xgt0, scale_factor = ctx.saved_tensors
-            for _ in range(ctx.channel_dim, x_grad.ndim - 1):
+            xgt0, scale_factor = self.tmp
+            for _ in range(channel_dim, dout.ndim - 1):
                 scale_factor = scale_factor.unsqueeze(-1)
-            factor = scale_factor * (xgt0.to(x_grad.dtype) - 0.5)
-        neg_delta_grad = x_grad.abs() * factor
+            factor = scale_factor * (xgt0.to(dout.dtype) - 0.5)
+        neg_delta_grad = dout.abs() * factor
         return (
-            x_grad - neg_delta_grad,
+            dout - neg_delta_grad,
             None,
             None,
             None,
@@ -146,7 +178,7 @@ def _compute_scale_factor(
     if channel_dim < 0:
         channel_dim += x.ndim
     sum_dims = [d for d in range(x.ndim) if d != channel_dim]
-    x_abs_mean = torch.mean(x.abs(), dim=sum_dims).to(torch.float32)
+    x_abs_mean = ops.mean(x.abs(), axis=sum_dims).to(ms.float32)
 
     if min_abs == 0.0:
         below_threshold = 0.0
@@ -175,7 +207,7 @@ def _compute_sign_factor(
     if channel_dim < 0:
         channel_dim += x.ndim
     sum_dims = [d for d in range(x.ndim) if d != channel_dim]
-    proportion_positive = torch.mean((x > 0).to(torch.float32), dim=sum_dims)
+    proportion_positive = ops.mean((x > 0).to(ms.float32), axis=sum_dims)
     if min_positive == 0.0:
         factor1 = 0.0
     else:
@@ -199,7 +231,7 @@ def _compute_sign_factor(
     return sign_factor
 
 
-class ActivationBalancer(torch.nn.Module):
+class ActivationBalancer(nn.Cell):
     """
     Modifies the backpropped derivatives of a function to try to encourage, for
     each channel, that it is positive at least a proportion `threshold` of the
@@ -268,12 +300,11 @@ class ActivationBalancer(torch.nn.Module):
         # We occasionally sync this to a tensor called `count`, that exists to
         # make sure it is synced to disk when we load and save the model.
         self.cpu_count = 0
-        self.register_buffer("count", torch.tensor(0, dtype=torch.int64))
+        self.count=ms.Tensor(0, dtype=ms.int64)
 
-    def forward(self, x: Tensor) -> Tensor:
-        if torch.jit.is_scripting() or not x.requires_grad or torch.jit.is_tracing():
-            return _no_op(x)
+        self.ActivationBalancerFunction=ActivationBalancerFunction()
 
+    def construct(self, x: Tensor) -> Tensor:
         count = self.cpu_count
         self.cpu_count += 1
 
@@ -282,7 +313,7 @@ class ActivationBalancer(torch.nn.Module):
             # count affects the decay of 'prob'.  don't do this on every iter,
             # because syncing with the GPU is slow.
             self.cpu_count = max(self.cpu_count, self.count.item())
-            self.count.fill_(self.cpu_count)
+            self.count=ops.fill(self.count.dtype,self.count.shape,self.cpu_count)
 
         # the prob of doing some work exponentially decreases from 0.5 till it hits
         # a floor at min_prob (==0.1, by default)
@@ -303,33 +334,32 @@ class ActivationBalancer(torch.nn.Module):
                 sign_factor = None
 
             scale_factor = _compute_scale_factor(
-                x.detach(),
+                ops.stop_gradient(x),
                 self.channel_dim,
                 min_abs=self.min_abs,
                 max_abs=self.max_abs,
                 gain_factor=self.scale_gain_factor / prob,
                 max_factor=self.max_factor,
             )
-            return ActivationBalancerFunction.apply(
+            return self.ActivationBalancerFunction(
                 x,
                 scale_factor,
                 sign_factor,
                 self.channel_dim,
             )
         else:
-            return _no_op(x)
-
+            return x
 
 def BalancedDoubleSwish(
     d_model, channel_dim=-1, max_abs=10.0, min_prob=0.25
-) -> nn.Sequential:
+) -> nn.SequentialCell:
     """
     ActivationBalancer -> DoubleSwish
     """
     balancer = ActivationBalancer(
         d_model, channel_dim=channel_dim, max_abs=max_abs, min_prob=min_prob
     )
-    return nn.Sequential(
+    return nn.SequentialCell(
         balancer,
         DoubleSwish(),
     )

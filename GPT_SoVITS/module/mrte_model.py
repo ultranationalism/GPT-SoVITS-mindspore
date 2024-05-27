@@ -1,8 +1,8 @@
 # This is Multi-reference timbre encoder
 
-import torch
-from torch import nn
-from torch.nn.utils import remove_weight_norm, weight_norm
+import mindspore as ms
+from mindspore import nn,ops
+from mindnlp.modules.weight_norm import remove_weight_norm, weight_norm
 from module.attentions import MultiHeadAttention
 
 
@@ -61,7 +61,7 @@ class MRTE(nn.Cell):
         return x
 
 
-class SpeakerEncoder(torch.nn.Cell):
+class SpeakerEncoder(nn.Cell):
     def __init__(
         self,
         mel_n_channels=80,
@@ -80,7 +80,7 @@ class SpeakerEncoder(torch.nn.Cell):
         self.lstm.flatten_parameters()
         _, (hidden, _) = self.lstm(mels.swapaxes(-1, -2))
         embeds_raw = self.relu(self.linear(hidden[-1]))
-        return embeds_raw / torch.norm(embeds_raw, dim=1, keepdim=True)
+        return embeds_raw / ops.norm(embeds_raw, dim=1, keepdim=True)
 
 
 class MELEncoder(nn.Cell):
@@ -113,7 +113,7 @@ class MELEncoder(nn.Cell):
         return x
 
 
-class WN(torch.nn.Cell):
+class WN(nn.Cell):
     def __init__(self, hidden_channels, kernel_size, dilation_rate, n_layers):
         super(WN, self).__init__()
         assert kernel_size % 2 == 1
@@ -122,8 +122,8 @@ class WN(torch.nn.Cell):
         self.dilation_rate = dilation_rate
         self.n_layers = n_layers
 
-        self.in_layers = torch.nn.CellList()
-        self.res_skip_layers = torch.nn.CellList()
+        self.in_layers = nn.CellList()
+        self.res_skip_layers = nn.CellList()
 
         for i in range(n_layers):
             dilation = dilation_rate**i
@@ -144,13 +144,13 @@ class WN(torch.nn.Cell):
             else:
                 res_skip_channels = hidden_channels
 
-            res_skip_layer = torch.nn.Conv1d(hidden_channels, res_skip_channels, 1)
+            res_skip_layer = nn.Conv1d(hidden_channels, res_skip_channels, 1)
             res_skip_layer = weight_norm(res_skip_layer, name="weight")
             self.res_skip_layers.append(res_skip_layer)
 
     def construct(self, x):
-        output = torch.zeros_like(x)
-        n_channels_tensor = torch.IntTensor([self.hidden_channels])
+        output = ops.zeros_like(x)
+        n_channels_tensor = ms.Tensor([self.hidden_channels],dtype=ms.int32)
 
         for i in range(self.n_layers):
             x_in = self.in_layers[i](x)
@@ -173,20 +173,19 @@ class WN(torch.nn.Cell):
             remove_weight_norm(l)
 
 
-@torch.jit.script
 def fused_add_tanh_sigmoid_multiply(input, n_channels):
     n_channels_int = n_channels[0]
-    t_act = torch.tanh(input[:, :n_channels_int, :])
-    s_act = torch.sigmoid(input[:, n_channels_int:, :])
+    t_act = ops.tanh(input[:, :n_channels_int, :])
+    s_act = ops.sigmoid(input[:, n_channels_int:, :])
     acts = t_act * s_act
     return acts
 
 
 if __name__ == "__main__":
-    content_enc = torch.randn(3, 192, 100)
-    content_mask = ops.ones(3, 1, 100)
-    ref_mel = torch.randn(3, 128, 30)
-    ref_mask = ops.ones(3, 1, 30)
+    content_enc = ops.randn(3, 192, 100)
+    content_mask = ops.ones([3, 1, 100])
+    ref_mel = ops.randn(3, 128, 30)
+    ref_mask = ops.ones([3, 1, 30])
     model = MRTE()
     out = model(content_enc, content_mask, ref_mel, ref_mask)
     print(out.shape)

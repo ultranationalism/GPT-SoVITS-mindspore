@@ -1,25 +1,24 @@
 import time
 
 import librosa
-import torch
-import torch.nn.functional as F
+import mindspore as ms
+from mindspore import nn,ops
 import soundfile as sf
 import logging
 
 logging.getLogger("numba").setLevel(logging.WARNING)
 
-from transformers import (
+from mindnlp.transformers import (
     Wav2Vec2FeatureExtractor,
     HubertModel,
 )
 
 import utils
-import torch.nn as nn
 
 cnhubert_base_path = None
 
 
-class CNHubert(nn.Module):
+class CNHubert(nn.Cell):
     def __init__(self):
         super().__init__()
         self.model = HubertModel.from_pretrained(cnhubert_base_path)
@@ -27,40 +26,40 @@ class CNHubert(nn.Module):
             cnhubert_base_path
         )
 
-    def forward(self, x):
+    def construct(self, x):
         input_values = self.feature_extractor(
             x, return_tensors="pt", sampling_rate=16000
-        ).input_values.to(x.device)
+        ).input_values
         feats = self.model(input_values)["last_hidden_state"]
         return feats
 
 
-# class CNHubertLarge(nn.Module):
+# class CNHubertLarge(nn.Cell):
 #     def __init__(self):
 #         super().__init__()
 #         self.model = HubertModel.from_pretrained("/data/docker/liujing04/gpt-vits/chinese-hubert-large")
 #         self.feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained("/data/docker/liujing04/gpt-vits/chinese-hubert-large")
-#     def forward(self, x):
+#     def construct(self, x):
 #         input_values = self.feature_extractor(x, return_tensors="pt", sampling_rate=16000).input_values.to(x.device)
 #         feats = self.model(input_values)["last_hidden_state"]
 #         return feats
 #
-# class CVec(nn.Module):
+# class CVec(nn.Cell):
 #     def __init__(self):
 #         super().__init__()
 #         self.model = HubertModel.from_pretrained("/data/docker/liujing04/vc-webui-big/hubert_base")
 #         self.feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained("/data/docker/liujing04/vc-webui-big/hubert_base")
-#     def forward(self, x):
+#     def construct(self, x):
 #         input_values = self.feature_extractor(x, return_tensors="pt", sampling_rate=16000).input_values.to(x.device)
 #         feats = self.model(input_values)["last_hidden_state"]
 #         return feats
 #
-# class cnw2v2base(nn.Module):
+# class cnw2v2base(nn.Cell):
 #     def __init__(self):
 #         super().__init__()
 #         self.model = Wav2Vec2Model.from_pretrained("/data/docker/liujing04/gpt-vits/chinese-wav2vec2-base")
 #         self.feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained("/data/docker/liujing04/gpt-vits/chinese-wav2vec2-base")
-#     def forward(self, x):
+#     def construct(self, x):
 #         input_values = self.feature_extractor(x, return_tensors="pt", sampling_rate=16000).input_values.to(x.device)
 #         feats = self.model(input_values)["last_hidden_state"]
 #         return feats
@@ -68,7 +67,7 @@ class CNHubert(nn.Module):
 
 def get_model():
     model = CNHubert()
-    model.eval()
+    model.set_train(False)
     return model
 
 
@@ -89,9 +88,8 @@ def get_model():
 
 
 def get_content(hmodel, wav_16k_tensor):
-    with torch.no_grad():
-        feats = hmodel(wav_16k_tensor)
-    return feats.transpose(1, 2)
+    feats = ops.stop_gradient(hmodel(wav_16k_tensor))
+    return feats.swapaxes(1, 2)
 
 
 if __name__ == "__main__":

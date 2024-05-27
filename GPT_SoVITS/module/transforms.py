@@ -1,5 +1,5 @@
-import torch
-from torch.nn import functional as F
+import mindspore as ms
+from mindspore import nn,ops
 
 import numpy as np
 
@@ -44,7 +44,7 @@ def piecewise_rational_quadratic_transform(
 
 def searchsorted(bin_locations, inputs, eps=1e-6):
     bin_locations[..., -1] += eps
-    return torch.sum(inputs[..., None] >= bin_locations, dim=-1) - 1
+    return ops.sum(inputs[..., None] >= bin_locations, dim=-1) - 1
 
 
 def unconstrained_rational_quadratic_spline(
@@ -62,11 +62,11 @@ def unconstrained_rational_quadratic_spline(
     inside_interval_mask = (inputs >= -tail_bound) & (inputs <= tail_bound)
     outside_interval_mask = ~inside_interval_mask
 
-    outputs = torch.zeros_like(inputs)
-    logabsdet = torch.zeros_like(inputs)
+    outputs = ops.zeros_like(inputs)
+    logabsdet = ops.zeros_like(inputs)
 
     if tails == "linear":
-        unnormalized_derivatives = F.pad(unnormalized_derivatives, pad=(1, 1))
+        unnormalized_derivatives = ops.pad(unnormalized_derivatives, padding=(1, 1))
         constant = np.log(np.exp(1 - min_derivative) - 1)
         unnormalized_derivatives[..., 0] = constant
         unnormalized_derivatives[..., -1] = constant
@@ -111,7 +111,7 @@ def rational_quadratic_spline(
     min_bin_height=DEFAULT_MIN_BIN_HEIGHT,
     min_derivative=DEFAULT_MIN_DERIVATIVE,
 ):
-    if torch.min(inputs) < left or torch.max(inputs) > right:
+    if ops.min(inputs) < left or ops.max(inputs) > right:
         raise ValueError("Input to a transform is not within its domain")
 
     num_bins = unnormalized_widths.shape[-1]
@@ -121,21 +121,21 @@ def rational_quadratic_spline(
     if min_bin_height * num_bins > 1.0:
         raise ValueError("Minimal bin height too large for the number of bins")
 
-    widths = F.softmax(unnormalized_widths, dim=-1)
+    widths = ops.softmax(unnormalized_widths, axis=-1)
     widths = min_bin_width + (1 - min_bin_width * num_bins) * widths
-    cumwidths = torch.cumsum(widths, dim=-1)
-    cumwidths = F.pad(cumwidths, pad=(1, 0), mode="constant", value=0.0)
+    cumwidths = ops.cumsum(widths, axis=-1)
+    cumwidths = ops.pad(cumwidths, padding=(1, 0), mode="constant", value=0.0)
     cumwidths = (right - left) * cumwidths + left
     cumwidths[..., 0] = left
     cumwidths[..., -1] = right
     widths = cumwidths[..., 1:] - cumwidths[..., :-1]
 
-    derivatives = min_derivative + F.softplus(unnormalized_derivatives)
+    derivatives = min_derivative + ops.softplus(unnormalized_derivatives)
 
-    heights = F.softmax(unnormalized_heights, dim=-1)
+    heights = ops.softmax(unnormalized_heights, axis=-1)
     heights = min_bin_height + (1 - min_bin_height * num_bins) * heights
-    cumheights = torch.cumsum(heights, dim=-1)
-    cumheights = F.pad(cumheights, pad=(1, 0), mode="constant", value=0.0)
+    cumheights = ops.cumsum(heights, axis=-1)
+    cumheights = ops.pad(cumheights, padding=(1, 0), mode="constant", value=0.0)
     cumheights = (top - bottom) * cumheights + bottom
     cumheights[..., 0] = bottom
     cumheights[..., -1] = top
@@ -170,7 +170,7 @@ def rational_quadratic_spline(
         discriminant = b.pow(2) - 4 * a * c
         assert (discriminant >= 0).all()
 
-        root = (2 * c) / (-b - torch.sqrt(discriminant))
+        root = (2 * c) / (-b - ops.sqrt(discriminant))
         outputs = root * input_bin_widths + input_cumwidths
 
         theta_one_minus_theta = root * (1 - root)
@@ -183,7 +183,7 @@ def rational_quadratic_spline(
             + 2 * input_delta * theta_one_minus_theta
             + input_derivatives * (1 - root).pow(2)
         )
-        logabsdet = torch.log(derivative_numerator) - 2 * torch.log(denominator)
+        logabsdet = ops.log(derivative_numerator) - 2 * ops.log(denominator)
 
         return outputs, -logabsdet
     else:
@@ -204,6 +204,6 @@ def rational_quadratic_spline(
             + 2 * input_delta * theta_one_minus_theta
             + input_derivatives * (1 - theta).pow(2)
         )
-        logabsdet = torch.log(derivative_numerator) - 2 * torch.log(denominator)
+        logabsdet = ops.log(derivative_numerator) - 2 * ops.log(denominator)
 
         return outputs, logabsdet

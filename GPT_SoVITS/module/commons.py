@@ -6,7 +6,7 @@ from mindspore.common.initializer import initializer,Normal
 def init_weights(m, mean=0.0, std=0.01):
     classname = m.__class__.__name__
     if classname.find("Conv") != -1:
-        m.weight.set_data(initializer(Normal(mean, std),shape=m.shape,dtype=m.dtype))
+        m.weight.set_data(initializer(Normal(mean, std),shape=m.weight.shape,dtype=m.weight.dtype))
 
 
 def get_padding(kernel_size, dilation=1):
