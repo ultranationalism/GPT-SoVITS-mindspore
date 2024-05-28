@@ -88,7 +88,7 @@ class StochasticDurationPredictor(nn.Cell):
             h_w = self.post_convs(h_w, x_mask)
             h_w = self.post_proj(h_w) * x_mask
             e_q = (
-                ops.randn(w.shape(0), 2, w.shape(2)).to( dtype=x.dtype)
+                ops.randn(w.shape[0], 2, w.shape[2]).to( dtype=x.dtype)
                 * x_mask
             )
             z_q = e_q
@@ -122,7 +122,7 @@ class StochasticDurationPredictor(nn.Cell):
             flows = list(reversed(self.flows))
             flows = flows[:-2] + [flows[-1]]  # remove a useless vflow
             z = (
-                ops.randn(x.shape(0), 2, x.shape(2)).to(dtype=x.dtype)
+                ops.randn(x.shape[0], 2, x.shape[2]).to(dtype=x.dtype)
                 * noise_scale
             )
             for flow in flows:
@@ -227,7 +227,7 @@ class TextEncoder(nn.Cell):
         self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
 
     def construct(self, y, y_lengths, text, text_lengths, ge, test=None):
-        y_mask = ops.unsqueeze(commons.sequence_mask(y_lengths, y.shape(2)), 1).to(
+        y_mask = ops.unsqueeze(commons.sequence_mask(y_lengths, y.shape[2]), 1).to(
             y.dtype
         )
 
@@ -236,7 +236,7 @@ class TextEncoder(nn.Cell):
         y = self.encoder_ssl(y * y_mask, y_mask)
 
         text_mask = ops.unsqueeze(
-            commons.sequence_mask(text_lengths, text.shape(1)), 1
+            commons.sequence_mask(text_lengths, text.shape[1]), 1
         ).to(y.dtype)
         if test == 1:
             text[:, :] = 0
@@ -348,7 +348,7 @@ class PosteriorEncoder(nn.Cell):
     def construct(self, x, x_lengths, g=None):
         if g != None:
             g = ops.stop_gradient(g)
-        x_mask = ops.unsqueeze(commons.sequence_mask(x_lengths, x.shape(2)), 1).to(
+        x_mask = ops.unsqueeze(commons.sequence_mask(x_lengths, x.shape[2]), 1).to(
             x.dtype
         )
         x = self.pre(x) * x_mask
@@ -391,7 +391,7 @@ class WNEncoder(nn.Cell):
         self.norm = modules.LayerNorm(out_channels)
 
     def construct(self, x, x_lengths, g=None):
-        x_mask = ops.unsqueeze(commons.sequence_mask(x_lengths, x.shape(2)), 1).to(
+        x_mask = ops.unsqueeze(commons.sequence_mask(x_lengths, x.shape[2]), 1).to(
             x.dtype
         )
         x = self.pre(x) * x_mask
@@ -654,7 +654,7 @@ class ReferenceEncoder(nn.Cell):
         self.proj = nn.Dense(128, gin_channels)
 
     def construct(self, inputs):
-        N = inputs.shape(0)
+        N = inputs.shape[0]
         out = inputs.view(N, 1, -1, self.spec_channels)  # [N, 1, Ty, n_freqs]
         for conv in self.convs:
             out = conv(out)
@@ -662,8 +662,8 @@ class ReferenceEncoder(nn.Cell):
             out = ops.relu(out)  # [N, 128, Ty//2^K, n_mels//2^K]
 
         out = out.swapaxes(1, 2)  # [N, Ty//2^K, 128, n_mels//2^K]
-        T = out.shape(1)
-        N = out.shape(0)
+        T = out.shape[1]
+        N = out.shape[0]
         out = out.contiguous().view(N, T, -1)  # [N, Ty//2^K, 128*n_mels//2^K]
 
         self.gru.flatten_parameters()
@@ -787,7 +787,7 @@ class CodePredictor(nn.Cell):
         target = codes[1:].swapaxes(0, 1)
         if not infer:
             logits = logits.reshape(-1, self.dims)
-            target = target.reshape(-1)
+            target = target.reshape[-1]
             loss = ops.cross_entropy(logits, target)
             return loss
         else:
@@ -908,7 +908,7 @@ class SynthesizerTrn(nn.Cell):
             # self.enc_p.mrte.requires_grad_(False)
 
     def construct(self, ssl, y, y_lengths, text, text_lengths):
-        y_mask = ops.unsqueeze(commons.sequence_mask(y_lengths, y.shape(2)), 1).to(
+        y_mask = ops.unsqueeze(commons.sequence_mask(y_lengths, y.shape[2]), 1).to(
             y.dtype
         )
         ge = self.ref_enc(y * y_mask, y_mask)
@@ -948,7 +948,7 @@ class SynthesizerTrn(nn.Cell):
         )
 
     def infer(self, ssl, y, y_lengths, text, text_lengths, test=None, noise_scale=0.5):
-        y_mask = ops.unsqueeze(commons.sequence_mask(y_lengths, y.shape(2)), 1).to(
+        y_mask = ops.unsqueeze(commons.sequence_mask(y_lengths, y.shape[2]), 1).to(
             y.dtype
         )
         ge = self.ref_enc(y * y_mask, y_mask)
@@ -973,14 +973,14 @@ class SynthesizerTrn(nn.Cell):
     def decode(self, codes, text, refer, noise_scale=0.5):
         ge = None
         if refer is not None:
-            refer_lengths = ops.stop_gradient(ms.Tensor([refer.shape(2)]))
+            refer_lengths = ops.stop_gradient(ms.Tensor([refer.shape[2]]))
             refer_mask = ops.stop_gradient(ops.unsqueeze(
-                commons.sequence_mask(refer_lengths, refer.shape(2)), 1
+                commons.sequence_mask(refer_lengths, refer.shape[2]), 1
             ).to(refer.dtype))
             ge = ops.stop_gradient(self.ref_enc(refer * refer_mask, refer_mask))
 
-        y_lengths = ops.stop_gradient(ms.Tensor([codes.shape(2) * 2]))
-        text_lengths = ops.stop_gradient(ms.Tensor([text.shape(-1)]))
+        y_lengths = ops.stop_gradient(ms.Tensor([codes.shape[2] * 2]))
+        text_lengths = ops.stop_gradient(ms.Tensor([text.shape[-1]]))
 
         quantized = ops.stop_gradient(self.quantizer.decode(codes))
         if self.semantic_frame_rate == "25hz":

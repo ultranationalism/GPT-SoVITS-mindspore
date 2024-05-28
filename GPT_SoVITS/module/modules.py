@@ -1,8 +1,9 @@
 import math
 import numpy as np
 import mindspore as ms
+import mindnlp
 from mindspore import ops,nn,Parameter
-from mindspore.common.initializer import Normal
+from mindspore.common.initializer import Normal,initializer,Zero
 
 from mindspore.nn import Conv1d
 from mindnlp.modules.weight_norm import remove_weight_norm, weight_norm
@@ -151,6 +152,7 @@ class WN(nn.Cell):
         self.n_layers = n_layers
         self.gin_channels = gin_channels
         self.p_dropout = p_dropout
+        self.padding=[]
 
         self.in_layers = nn.CellList()
         self.res_skip_layers = nn.CellList()
@@ -165,12 +167,12 @@ class WN(nn.Cell):
         for i in range(n_layers):
             dilation = dilation_rate**i
             padding = int((kernel_size * dilation - dilation) / 2)
+            self.padding.append(padding)
             in_layer = nn.Conv1d(
                 hidden_channels,
                 2 * hidden_channels,
                 kernel_size,
                 dilation=dilation,
-                padding=padding,
             )
             in_layer = weight_norm(in_layer, name="weight")
             self.in_layers.append(in_layer)
@@ -193,6 +195,7 @@ class WN(nn.Cell):
             g = self.cond_layer(g)
 
         for i in range(self.n_layers):
+            x=ops.pad(x,((0, 0), (self.padding[i], self.padding[i]), (0, 0)))
             x_in = self.in_layers[i](x)
             if g is not None:
                 cond_offset = i * 2 * self.hidden_channels
@@ -389,7 +392,7 @@ class Flip(nn.Cell):
     def construct(self, x, *args, reverse=False, **kwargs):
         x = ops.flip(x, [1])
         if not reverse:
-            logdet = ops.zeros(x.shape(0)).to(dtype=x.dtype, device=x.device)
+            logdet = ops.zeros(x.shape[0]).to(dtype=x.dtype, device=x.device)
             return x, logdet
         else:
             return x
@@ -445,8 +448,8 @@ class ResidualCouplingLayer(nn.Cell):
             gin_channels=gin_channels,
         )
         self.post = nn.Conv1d(hidden_channels, self.half_channels * (2 - mean_only), 1)
-        self.post.weight.data.zero_()
-        self.post.bias.data.zero_()
+        self.post.weight.set_data(initializer(Zero(), self.post.weight.shape,self.post.weight.dtype))
+        self.post.bias.set_data(initializer(Zero(), self.post.bias.shape,self.post.bias.dtype))
 
     def construct(self, x, x_mask, g=None, reverse=False):
         x0, x1 = ops.split(x, [self.half_channels] * 2, 1)
@@ -595,13 +598,13 @@ class ConvNorm(nn.Cell):
         if padding is None:
             assert kernel_size % 2 == 1
             padding = int(dilation * (kernel_size - 1) / 2)
+        self.padding=padding
 
         self.conv = nn.Conv1d(
             in_channels,
             out_channels,
             kernel_size=kernel_size,
             stride=stride,
-            padding=padding,
             dilation=dilation,
             has_bias=bias,
         )
@@ -610,6 +613,7 @@ class ConvNorm(nn.Cell):
             self.conv = s_n(self.conv)
 
     def construct(self, input):
+        input =ops.pad(input,((0, 0), (self.padding, self.padding), (0, 0)))
         out = self.conv(input)
         return out
 
@@ -714,7 +718,7 @@ class MelStyleEncoder(nn.Cell):
         self.n_head = style_head
         self.dropout = dropout
 
-        self.spectral = nn.Sequential(
+        self.spectral = nn.SequentialCell(
             LinearNorm(self.in_dim, self.hidden_dim),
             Mish(),
             nn.Dropout(p=self.dropout),
@@ -723,7 +727,7 @@ class MelStyleEncoder(nn.Cell):
             nn.Dropout(p=self.dropout),
         )
 
-        self.temporal = nn.Sequential(
+        self.temporal = nn.SequentialCell(
             Conv1dGLU(self.hidden_dim, self.hidden_dim, self.kernel_size, self.dropout),
             Conv1dGLU(self.hidden_dim, self.hidden_dim, self.kernel_size, self.dropout),
         )
@@ -835,7 +839,7 @@ class ActNorm(nn.Cell):
 
     def construct(self, x, x_mask=None, g=None, reverse=False, **kwargs):
         if x_mask is None:
-            x_mask = ops.ones([x.shape(0), 1, x.shape(2)]).to(
+            x_mask = ops.ones([x.shape[0], 1, x.shape[2]]).to(
                  dtype=x.dtype
             )
         x_len = ops.sum(x_mask, [1, 2])

@@ -54,19 +54,19 @@ class SinePositionalEmbedding(nn.Cell):
     def extend_pe(self, x):
         """Reset the positional encodings."""
         if self.pe is not None:
-            if self.pe.shape(1) >= x.shape(1):
+            if self.pe.shape[1] >= x.shape[1]:
                 if self.pe.dtype != x.dtype:
                     self.pe = self.pe.to(dtype=x.dtype)
                 return
-        pe = ops.zeros(x.shape(1), self.embedding_dim)
+        pe = ops.zeros(x.shape[1], self.embedding_dim)
         if self.reverse:
             position = ops.arange(
-                x.shape(1) - 1, -1, -1.0, dtype=ms.float32
+                x.shape[1] - 1, -1, -1.0, dtype=ms.float32
             ).unsqueeze(1)
         else:
-            position = ops.arange(0, x.shape(1), dtype=ms.float32).unsqueeze(1)
+            position = ops.arange(0, x.shape[1], dtype=ms.float32).unsqueeze(1)
         div_term = ops.exp(
-            ops.arange(0, self.embedding_dim, 2, dtype=ops.float32)
+            ops.arange(0, self.embedding_dim, 2, dtype=ms.float32)
             * -(math.log(10000.0) / self.embedding_dim)
         )
         pe[:, 0::2] = ops.sin(position * div_term)
@@ -77,5 +77,5 @@ class SinePositionalEmbedding(nn.Cell):
     def construct(self, x: ms.Tensor) -> ms.Tensor:
         self.extend_pe(x)
         output = x.unsqueeze(-1) if x.ndim == 2 else x
-        output = output * self.x_scale + self.alpha * self.pe[:, : x.shape(1)]
+        output = output * self.x_scale + self.alpha * self.pe[:, : x.shape[1]]
         return self.dropout(output)

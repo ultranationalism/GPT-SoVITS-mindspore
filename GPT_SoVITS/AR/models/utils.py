@@ -33,7 +33,7 @@ def make_pad_mask(lengths: ms.Tensor, max_len: int = 0) -> ms.Tensor:
     """
     assert lengths.ndim == 1, lengths.ndim
     max_len = max(max_len, lengths.max())
-    n = lengths.shape(0)
+    n = lengths.shape[0]
     seq_range = ops.arange(0, max_len)
     expaned_lengths = seq_range.unsqueeze(0).broadcast_to((n, max_len))
 
@@ -54,7 +54,7 @@ def top_k_top_p_filtering(
     From: https://gist.github.com/thomwolf/1a5a29f6962089e871b94cbd09daf317
     """
     if top_k > 0:
-        top_k = min(max(top_k, min_tokens_to_keep), logits.shape(-1))  # Safety check
+        top_k = min(max(top_k, min_tokens_to_keep), logits.shape[-1])  # Safety check
         # Remove all tokens with a probability less than the last token of the top-k
         indices_to_remove = logits < ops.topk(logits, top_k)[0][..., -1, None]
         logits[indices_to_remove] = filter_value
@@ -144,7 +144,7 @@ def logits_to_probs(
     logits = logits / max(temperature, 1e-5)
 
     if top_k is not None:
-        v, _ = ops.topk(logits, min(top_k, logits.shape(-1)))
+        v, _ = ops.topk(logits, min(top_k, logits.shape[-1]))
         pivot = v.select(-1, -1).unsqueeze(-1)
         logits = ops.where(logits < pivot, -float("Inf"), logits)
 

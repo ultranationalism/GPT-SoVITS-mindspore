@@ -184,7 +184,7 @@ class MultiHeadAttention(nn.Cell):
 
     def attention(self, query, key, value, mask=None):
         # reshape [b, d, t] -> [b, n_h, t, d_k]
-        b, d, t_s, _ = (*key.shape, query.shape(2))
+        b, d, t_s, _ = (*key.shape, query.shape[2])
         query = query.view(b, self.n_heads, self.k_channels, -1).swapaxes(2, 3)
         key = key.view(b, self.n_heads, self.k_channels, -1).swapaxes(2, 3)
         value = value.view(b, self.n_heads, self.k_channels, -1).swapaxes(2, 3)

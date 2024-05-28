@@ -339,22 +339,22 @@ def multi_head_attention_forward_patched(
     else:
         # TODO finish disentangling control flow so we don't do in-projections when statics are passed
         assert (
-            static_k.shape(0) == bsz * num_heads
-        ), f"expecting static_k.shape(0) of {bsz * num_heads}, but got {static_k.shape(0)}"
+            static_k.shape[0] == bsz * num_heads
+        ), f"expecting static_k.shape[0] of {bsz * num_heads}, but got {static_k.shape[0]}"
         assert (
-            static_k.shape(2) == head_dim
-        ), f"expecting static_k.shape(2) of {head_dim}, but got {static_k.shape(2)}"
+            static_k.shape[2] == head_dim
+        ), f"expecting static_k.shape[2] of {head_dim}, but got {static_k.shape[2]}"
         k = static_k
     if static_v is None:
         v = v.view(v.shape[0], bsz * num_heads, head_dim).swapaxes(0, 1)
     else:
         # TODO finish disentangling control flow so we don't do in-projections when statics are passed
         assert (
-            static_v.shape(0) == bsz * num_heads
-        ), f"expecting static_v.shape(0) of {bsz * num_heads}, but got {static_v.shape(0)}"
+            static_v.shape[0] == bsz * num_heads
+        ), f"expecting static_v.shape[0] of {bsz * num_heads}, but got {static_v.shape[0]}"
         assert (
-            static_v.shape(2) == head_dim
-        ), f"expecting static_v.shape(2) of {head_dim}, but got {static_v.shape(2)}"
+            static_v.shape[2] == head_dim
+        ), f"expecting static_v.shape[2] of {head_dim}, but got {static_v.shape[2]}"
         v = static_v
 
     # add zero attention along batch dimension (now first)
@@ -372,7 +372,7 @@ def multi_head_attention_forward_patched(
             key_padding_mask = pad(key_padding_mask, (0, 1))
 
     # update source sequence length after adjustments
-    src_len = k.shape(1)
+    src_len = k.shape[1]
 
     # merge key padding and attention masks
     if key_padding_mask is not None:
@@ -422,7 +422,7 @@ def multi_head_attention_forward_patched(
             attn_output.swapaxes(0, 1).contiguous().view(tgt_len * bsz, embed_dim)
         )
         attn_output = linear(attn_output, out_proj_weight, out_proj_bias)
-        attn_output = attn_output.view(tgt_len, bsz, attn_output.shape(1))
+        attn_output = attn_output.view(tgt_len, bsz, attn_output.shape[1])
 
         # optionally average attention weights over heads
         attn_output_weights = attn_output_weights.view(bsz, num_heads, tgt_len, src_len)
@@ -439,7 +439,7 @@ def multi_head_attention_forward_patched(
         # if attn_mask's shape is (1, L, S) we need to unsqueeze to (1, 1, L, S)
         # in order to match the input for SDPA of (N, num_heads, L, S)
         if attn_mask is not None:
-            if attn_mask.shape(0) == 1 and attn_mask.ndimension() == 3:
+            if attn_mask.shape[0] == 1 and attn_mask.ndimension() == 3:
                 attn_mask = attn_mask.unsqueeze(0)
             else:
                 attn_mask = attn_mask.view(bsz, num_heads, -1, src_len)
@@ -458,7 +458,7 @@ def multi_head_attention_forward_patched(
         )
 
         attn_output = linear(attn_output, out_proj_weight, out_proj_bias)
-        attn_output = attn_output.view(tgt_len, bsz, attn_output.shape(1))
+        attn_output = attn_output.view(tgt_len, bsz, attn_output.shape[1])
         if not is_batched:
             # squeeze the output if input was unbatched
             attn_output = attn_output.squeeze(1)

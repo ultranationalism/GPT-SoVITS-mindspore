@@ -141,7 +141,7 @@ class EuclideanCodebook(nn.Cell):
         self.inited = ms.Tensor([not kmeans_init])
         self.cluster_size = ops.zeros(codebook_size)
         self.embed = embed
-        self.embed_avg = embed.clone()
+        self.embed_avg = ms.Tensor(embed)
 
     def init_embed_(self, data):
         if self.inited:

@@ -6,7 +6,7 @@ from mindspore.common.initializer import initializer,Normal
 def init_weights(m, mean=0.0, std=0.01):
     classname = m.__class__.__name__
     if classname.find("Conv") != -1:
-        m.weight.set_data(initializer(Normal(mean, std),shape=m.weight.shape,dtype=m.weight.dtype))
+        m.weight=initializer(Normal(mean, std),shape=m.weight.shape,dtype=m.weight.dtype)
 
 
 def get_padding(kernel_size, dilation=1):
@@ -47,7 +47,7 @@ def rand_gumbel_like(x):
 
 def slice_segments(x, ids_str, segment_size=4):
     ret = ops.zeros_like(x[:, :, :segment_size])
-    for i in range(x.shape(0)):
+    for i in range(x.shape[0]):
         idx_str = ids_str[i]
         idx_end = idx_str + segment_size
         ret[i] = x[i, :, idx_str:idx_end]

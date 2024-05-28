@@ -26,6 +26,10 @@ def convert_weight(safetensor, msname):
         cdict=hparams_to_dict(cdict)
         if isinstance(cdict,collections.OrderedDict):
             for name,data in cdict.items():
+                if '.gamma' in name:
+                    name = name.replace('.gamma', '.layer_norm.weight')
+                elif '.beta' in name:
+                    name = name.replace('.beta', '.layer_norm.bias')
                 data = Tensor(data.numpy())
                 # 将权重名称和形状作为键值对添加到列表中
                 temp.append({"name": name, "data": data})
@@ -89,4 +93,4 @@ def convert_weight_back(msname, pth):
     # 打印转换成功的信息
     print("convert MindOne Stable Diffusion checkpoint(mindspore) to Stable Diffusion checkpoint(torch) success!")
 
-convert_weight("/root/GPT-SoVITS/GPT_SoVITS/pretrained_models/s2G488k.pth","/root/GPT-SoVITS/GPT_SoVITS/pretrained_models/s2G488k.ckpt")
+convert_weight("/root/GPT-SoVITS/GPT_SoVITS/pretrained_models/s2D488k.pth","/root/GPT-SoVITS/GPT_SoVITS/pretrained_models/s2D488k.ckpt")

@@ -84,7 +84,7 @@ class StochasticDurationPredictor(nn.Cell):
             h_w = self.post_convs(h_w, x_mask)
             h_w = self.post_proj(h_w) * x_mask
             e_q = (
-                torch.randn(w.shape(0), 2, w.shape(2)).to(device=x.device, dtype=x.dtype)
+                torch.randn(w.shape[0], 2, w.shape[2]).to(device=x.device, dtype=x.dtype)
                 * x_mask
             )
             z_q = e_q
@@ -118,7 +118,7 @@ class StochasticDurationPredictor(nn.Cell):
             flows = list(reversed(self.flows))
             flows = flows[:-2] + [flows[-1]]  # remove a useless vflow
             z = (
-                torch.randn(x.shape(0), 2, x.shape(2)).to(device=x.device, dtype=x.dtype)
+                torch.randn(x.shape[0], 2, x.shape[2]).to(device=x.device, dtype=x.dtype)
                 * noise_scale
             )
             for flow in flows:
@@ -338,7 +338,7 @@ class PosteriorEncoder(nn.Cell):
     def construct(self, x, x_lengths, g=None):
         if g != None:
             g = g.detach()
-        x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.shape(2)), 1).to(
+        x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.shape[2]), 1).to(
             x.dtype
         )
         x = self.pre(x) * x_mask
@@ -381,7 +381,7 @@ class WNEncoder(nn.Cell):
         self.norm = modules.LayerNorm(out_channels)
 
     def construct(self, x, x_lengths, g=None):
-        x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.shape(2)), 1).to(
+        x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.shape[2]), 1).to(
             x.dtype
         )
         x = self.pre(x) * x_mask
@@ -640,7 +640,7 @@ class ReferenceEncoder(nn.Cell):
         self.proj = nn.Dense(128, gin_channels)
 
     def construct(self, inputs):
-        N = inputs.shape(0)
+        N = inputs.shape[0]
         out = inputs.view(N, 1, -1, self.spec_channels)  # [N, 1, Ty, n_freqs]
         for conv in self.convs:
             out = conv(out)
@@ -648,8 +648,8 @@ class ReferenceEncoder(nn.Cell):
             out = F.relu(out)  # [N, 128, Ty//2^K, n_mels//2^K]
 
         out = out.swapaxes(1, 2)  # [N, Ty//2^K, 128, n_mels//2^K]
-        T = out.shape(1)
-        N = out.shape(0)
+        T = out.shape[1]
+        N = out.shape[0]
         out = out.contiguous().view(N, T, -1)  # [N, Ty//2^K, 128*n_mels//2^K]
 
         self.gru.flatten_parameters()
@@ -773,7 +773,7 @@ class CodePredictor(nn.Cell):
         target = codes[1:].swapaxes(0, 1)
         if not infer:
             logits = logits.reshape(-1, self.dims)
-            target = target.reshape(-1)
+            target = target.reshape[-1]
             loss = torch.nn.functional.cross_entropy(logits, target)
             return loss
         else:

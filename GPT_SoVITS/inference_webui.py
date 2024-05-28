@@ -28,7 +28,7 @@ if os.path.exists("./gweight.txt"):
             "gpt_path", gweight_data)
 else:
     gpt_path = os.environ.get(
-        "gpt_path", "GPT_SoVITS/pretrained_models/s1bert25hz-2kh-longer-epoch=68e-step=50232.ckpt")
+        "gpt_path", "GPT_SoVITS/pretrained_models/s1bert25hz-2kh-longer-epoch=68e-step=50232-ms.ckpt")
 
 if os.path.exists("./sweight.txt"):
     with open("./sweight.txt", 'r', encoding="utf-8") as file:
@@ -152,8 +152,11 @@ def change_sovits_weights(sovits_path):
     else:
         vq_model = vq_model
     vq_model.set_train(False)
+    parameters = [param.name for param in vq_model.get_parameters()]
     #vq_model.load_state_dict(dict_s2["weight"], strict=False)
-    ms.load_param_into_net(vq_model,dict_s2 )
+    param_not_load ,ckpt_not_load =ms.load_param_into_net(vq_model,dict_s2 )
+    for para in ckpt_not_load:
+        print(f'{para=}')
     with open("./sweight.txt", "w", encoding="utf-8") as f:
         f.write(sovits_path)
 
@@ -165,16 +168,16 @@ def change_gpt_weights(gpt_path):
     global hz, max_sec, t2s_model, config
     hz = 50
     dict_s1 = ms.load_checkpoint(gpt_path, )
-    config = dict_s1["config"]
+    config = json.loads(dict_s1["config"])
     max_sec = config["data"]["max_sec"]
     t2s_model = Text2SemanticDecoder(config, top_k=3)
-    load_param_into_net()
+    ms.load_param_into_net(t2s_model,dict_s1)
     #t2s_model.load_state_dict(dict_s1["weight"])
     if is_half == True:
         t2s_model = t2s_model.half()
     t2s_model = t2s_model
-    t2s_model.eval()
-    total = sum([param.nelement() for param in t2s_model.parameters()])
+    t2s_model.set_train(False)
+    total = sum([ops.size(param) for param in t2s_model.get_parameters()])
     print("Number of parameter: %.2fM" % (total / 1e6))
     with open("./gweight.txt", "w", encoding="utf-8") as f: f.write(gpt_path)
 
@@ -527,7 +530,7 @@ def change_choices():
 
 
 pretrained_sovits_name = "GPT_SoVITS/pretrained_models/s2G488k.pth"
-pretrained_gpt_name = "GPT_SoVITS/pretrained_models/s1bert25hz-2kh-longer-epoch=68e-step=50232.ckpt"
+pretrained_gpt_name = "GPT_SoVITS/pretrained_models/s1bert25hz-2kh-longer-epoch=68e-step=50232-ms.ckpt"
 SoVITS_weight_root = "SoVITS_weights"
 GPT_weight_root = "GPT_weights"
 os.makedirs(SoVITS_weight_root, exist_ok=True)

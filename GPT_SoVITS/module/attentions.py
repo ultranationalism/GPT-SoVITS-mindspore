@@ -3,6 +3,7 @@ import math
 #from torch import nn
 #from torch.nn import functional as F
 import mindspore as ms
+import mindnlp
 from mindspore import nn,ops,Parameter
 
 from module import commons
@@ -156,7 +157,7 @@ class Decoder(nn.Cell):
         x: decoder input
         h: encoder output
         """
-        self_attn_mask = commons.subsequent_mask(x_mask.shape(2)).to(
+        self_attn_mask = commons.subsequent_mask(x_mask.shape[2]).to(
             device=x.device, dtype=x.dtype
         )
         encdec_attn_mask = h_mask.unsqueeze(2) * x_mask.unsqueeze(-1)
@@ -239,7 +240,7 @@ class MultiHeadAttention(nn.Cell):
 
     def attention(self, query, key, value, mask=None):
         # reshape [b, d, t] -> [b, n_h, t, d_k]
-        b, d, t_s, t_t = (*key.shape, query.shape(2))
+        b, d, t_s, t_t = (*key.shape, query.shape[2])
         query = query.view(b, self.n_heads, self.k_channels, t_t).swapaxes(2, 3)
         key = key.view(b, self.n_heads, self.k_channels, t_s).swapaxes(2, 3)
         value = value.view(b, self.n_heads, self.k_channels, t_s).swapaxes(2, 3)
@@ -610,7 +611,7 @@ class FFT(nn.Cell):
         if g is not None:
             g = self.cond_layer(g)
 
-        self_attn_mask = commons.subsequent_mask(x_mask.shape(2)).to(dtype=x.dtype)
+        self_attn_mask = commons.subsequent_mask(x_mask.shape[2]).to(dtype=x.dtype)
         x = x * x_mask
         for i in range(self.n_layers):
             if g is not None:

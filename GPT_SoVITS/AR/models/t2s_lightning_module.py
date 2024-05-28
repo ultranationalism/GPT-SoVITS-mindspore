@@ -99,7 +99,7 @@ class Text2SemanticLightningModule(LightningModule):
     #     sync_dist=True)
     #
     # # get infer output
-    # semantic_len = batch['semantic_ids'].shape(1)
+    # semantic_len = batch['semantic_ids'].shape[1]
     # prompt_len = min(int(semantic_len * 0.5), 150)
     # prompt = batch['semantic_ids'][:, :prompt_len]
     # pred_semantic = self.model.infer(batch['phoneme_ids'],

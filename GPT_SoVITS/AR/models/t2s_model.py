@@ -78,7 +78,7 @@ class Text2SemanticDecoder(nn.Cell):
             norm=LayerNorm(self.model_dim) if norm_first else None,
         )
 
-        self.ar_predict_layer = nn.Dense(self.model_dim, self.vocab_size, bias=False)
+        self.ar_predict_layer = nn.Dense(self.model_dim, self.vocab_size, has_bias=False)
         self.loss_fct = nn.CrossEntropyLoss(reduction="sum")
 
         """

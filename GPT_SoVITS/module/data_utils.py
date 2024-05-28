@@ -178,24 +178,24 @@ class TextAudioSpeakerCollate():
         """
         # Right zero-pad all one-hot text sequences to max input length
         _, ids_sorted_decreasing = ops.sort(
-            ms.Tensor([x[1].shape(1) for x in batch]),
+            ms.Tensor([x[1].shape[1] for x in batch]),
             axis =0, descending=True)
 
-        max_ssl_len = max([x[0].shape(2) for x in batch])
+        max_ssl_len = max([x[0].shape[2] for x in batch])
         max_ssl_len = int(2 * ((max_ssl_len // 2) + 1))
-        max_spec_len = max([x[1].shape(1) for x in batch])
+        max_spec_len = max([x[1].shape[1] for x in batch])
         max_spec_len = int(2 * ((max_spec_len // 2) + 1))
-        max_wav_len = max([x[2].shape(1) for x in batch])
-        max_text_len = max([x[3].shape(0) for x in batch])
+        max_wav_len = max([x[2].shape[1] for x in batch])
+        max_text_len = max([x[3].shape[0] for x in batch])
 
         ssl_lengths = ms.Tensor(len(batch))
         spec_lengths = ms.Tensor(len(batch))
         wav_lengths = ms.Tensor(len(batch))
         text_lengths = ms.Tensor(len(batch))
 
-        spec_padded = ms.Tensor(len(batch), batch[0][1].shape(0), max_spec_len)
+        spec_padded = ms.Tensor(len(batch), batch[0][1].shape[0], max_spec_len)
         wav_padded = ms.Tensor(len(batch), 1, max_wav_len)
-        ssl_padded = ms.Tensor(len(batch), batch[0][0].shape(1), max_ssl_len)
+        ssl_padded = ms.Tensor(len(batch), batch[0][0].shape[1], max_ssl_len)
         text_padded = ms.Tensor(len(batch), max_text_len)
 
         spec_padded.zero_()
@@ -207,20 +207,20 @@ class TextAudioSpeakerCollate():
             row = batch[ids_sorted_decreasing[i]]
 
             ssl = row[0]
-            ssl_padded[i, :, :ssl.shape(2)] = ssl[0, :, :]
-            ssl_lengths[i] = ssl.shape(2)
+            ssl_padded[i, :, :ssl.shape[2]] = ssl[0, :, :]
+            ssl_lengths[i] = ssl.shape[2]
 
             spec = row[1]
-            spec_padded[i, :, :spec.shape(1)] = spec
-            spec_lengths[i] = spec.shape(1)
+            spec_padded[i, :, :spec.shape[1]] = spec
+            spec_lengths[i] = spec.shape[1]
 
             wav = row[2]
-            wav_padded[i, :, :wav.shape(1)] = wav
-            wav_lengths[i] = wav.shape(1)
+            wav_padded[i, :, :wav.shape[1]] = wav
+            wav_lengths[i] = wav.shape[1]
 
             text = row[3]
-            text_padded[i, :text.shape(0)] = text
-            text_lengths[i] = text.shape(0)
+            text_padded[i, :text.shape[0]] = text
+            text_lengths[i] = text.shape[0]
 
         return ssl_padded, ssl_lengths, spec_padded, spec_lengths, wav_padded, wav_lengths, text_padded, text_lengths
 
