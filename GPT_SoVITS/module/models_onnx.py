@@ -650,7 +650,7 @@ class ReferenceEncoder(nn.Cell):
         out = out.swapaxes(1, 2)  # [N, Ty//2^K, 128, n_mels//2^K]
         T = out.shape[1]
         N = out.shape[0]
-        out = out.contiguous().view(N, T, -1)  # [N, Ty//2^K, 128*n_mels//2^K]
+        out = out.view(N, T, -1)  # [N, Ty//2^K, 128*n_mels//2^K]
 
         self.gru.flatten_parameters()
         memory, out = self.gru(out)  # out --- [1, N, 128]
@@ -899,7 +899,7 @@ class SynthesizerTrn(nn.Cell):
         quantized = self.quantizer.decode(codes)
         if self.semantic_frame_rate == "25hz":
             dquantized = ops.cat([quantized, quantized]).permute(1, 2, 0)
-            quantized = dquantized.contiguous().view(1, self.ssl_dim, -1)
+            quantized = dquantized.view(1, self.ssl_dim, -1)
 
         x, m_p, logs_p, y_mask = self.enc_p(
             quantized, text, ge

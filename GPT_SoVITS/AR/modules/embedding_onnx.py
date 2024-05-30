@@ -53,7 +53,7 @@ class SinePositionalEmbedding(nn.Cell):
         position = torch.cumsum(torch.ones_like(x[:,:,0]), dim=1).swapaxes(0, 1)
         scpe = (position * self.div_term).unsqueeze(0)
         pe = ops.cat([torch.sin(scpe), torch.cos(scpe)]).permute(1, 2, 0)
-        pe = pe.contiguous().view(1, -1, self.embedding_dim)
+        pe = pe.view(1, -1, self.embedding_dim)
         return pe
 
     def construct(self, x: ms.Tensor) -> ms.Tensor:

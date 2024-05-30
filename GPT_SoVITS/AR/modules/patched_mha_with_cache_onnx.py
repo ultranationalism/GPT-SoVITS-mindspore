@@ -48,7 +48,7 @@ def multi_head_attention_forward_patched(
     head_dim = embed_dim // num_heads
 
     proj_qkv = linear(query, in_proj_weight, in_proj_bias)
-    proj_qkv = proj_qkv.unflatten(-1, (3, query.shape[-1])).unsqueeze(0).swapaxes(0, -2).squeeze(-2).contiguous()
+    proj_qkv = proj_qkv.unflatten(-1, (3, query.shape[-1])).unsqueeze(0).swapaxes(0, -2).squeeze(-2)
     q, k, v = proj_qkv[0], proj_qkv[1], proj_qkv[2]
 
     if cache["first_infer"] == 1:
@@ -84,7 +84,7 @@ def multi_head_attention_forward_patched(
         q, k, v, attn_mask, dropout_p, is_causal
     )
     attn_output = (
-        attn_output.permute(2, 0, 1, 3).contiguous().view(-1, embed_dim)
+        attn_output.permute(2, 0, 1, 3).view(-1, embed_dim)
     )
     attn_output = linear(attn_output, out_proj_weight, out_proj_bias)
     attn_output = attn_output.view(-1, 1, attn_output.shape[1])

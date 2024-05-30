@@ -152,7 +152,6 @@ class WN(nn.Cell):
         self.n_layers = n_layers
         self.gin_channels = gin_channels
         self.p_dropout = p_dropout
-        self.padding=[]
 
         self.in_layers = nn.CellList()
         self.res_skip_layers = nn.CellList()
@@ -166,13 +165,13 @@ class WN(nn.Cell):
 
         for i in range(n_layers):
             dilation = dilation_rate**i
-            padding = int((kernel_size * dilation - dilation) / 2)
-            self.padding.append(padding)
             in_layer = nn.Conv1d(
                 hidden_channels,
                 2 * hidden_channels,
                 kernel_size,
                 dilation=dilation,
+                padding=int((kernel_size * dilation - dilation) / 2),
+                pad_mode="pad"
             )
             in_layer = weight_norm(in_layer, name="weight")
             self.in_layers.append(in_layer)
@@ -195,7 +194,6 @@ class WN(nn.Cell):
             g = self.cond_layer(g)
 
         for i in range(self.n_layers):
-            x=ops.pad(x,((0, 0), (self.padding[i], self.padding[i]), (0, 0)))
             x_in = self.in_layers[i](x)
             if g is not None:
                 cond_offset = i * 2 * self.hidden_channels
@@ -238,6 +236,8 @@ class ResBlock1(nn.Cell):
                         kernel_size,
                         1,
                         dilation=dilation[0],
+                        padding=get_padding(self.kernel_size, self.dilation[0]),
+                        pad_mode="pad",
                     ),
                     dim=0
                 ),
@@ -248,6 +248,8 @@ class ResBlock1(nn.Cell):
                         kernel_size,
                         1,
                         dilation=dilation[1],
+                        padding=get_padding(self.kernel_size, self.dilation[1]),
+                        pad_mode="pad",
                     ),
                     dim=0
                 ),
@@ -258,11 +260,14 @@ class ResBlock1(nn.Cell):
                         kernel_size,
                         1,
                         dilation=dilation[2],
+                        padding=get_padding(self.kernel_size, self.dilation[2]),
+                        pad_mode="pad",
                     ),
                     dim=0
                 ),
             ]
         )
+
         self.convs1.apply(init_weights)
 
         self.convs2 = nn.CellList(
@@ -274,6 +279,8 @@ class ResBlock1(nn.Cell):
                         kernel_size,
                         1,
                         dilation=1,
+                        padding=get_padding(self.kernel_size, 1),
+                        pad_mode="pad",
                     )
                     ,dim=0
                 ),
@@ -284,6 +291,8 @@ class ResBlock1(nn.Cell):
                         kernel_size,
                         1,
                         dilation=1,
+                        padding=get_padding(self.kernel_size, 1),
+                        pad_mode="pad",
                     ),
                     dim=0
                 ),
@@ -294,6 +303,8 @@ class ResBlock1(nn.Cell):
                         kernel_size,
                         1,
                         dilation=1,
+                        padding=get_padding(self.kernel_size, 1),
+                        pad_mode="pad",
                     ),
                     dim=0
                 ),
@@ -302,22 +313,18 @@ class ResBlock1(nn.Cell):
         self.convs2.apply(init_weights)
 
     def construct(self, x, x_mask=None):
-        n=0
         for c1, c2 in zip(self.convs1, self.convs2):
             xt = ops.leaky_relu(x, LRELU_SLOPE)
             if x_mask is not None:
                 xt = xt * x_mask
-            xt=ops.pad(xt,((0, 0), (get_padding(self.kernel_size, self.dilation[n]), get_padding(self.kernel_size, self.dilation[n])), (0, 0)))
             xt = c1(xt)
             xt = ops.leaky_relu(xt, LRELU_SLOPE)
             if x_mask is not None:
                 xt = xt * x_mask
-            xt=ops.pad(xt,((0, 0), (get_padding(self.kernel_size, 1), get_padding(self.kernel_size, 1)), (0, 0)))
             xt = c2(xt)
             x = xt + x
         if x_mask is not None:
             x = x * x_mask
-        n+=1
         return x
 
     def remove_weight_norm(self):
@@ -598,7 +605,6 @@ class ConvNorm(nn.Cell):
         if padding is None:
             assert kernel_size % 2 == 1
             padding = int(dilation * (kernel_size - 1) / 2)
-        self.padding=padding
 
         self.conv = nn.Conv1d(
             in_channels,
@@ -607,13 +613,14 @@ class ConvNorm(nn.Cell):
             stride=stride,
             dilation=dilation,
             has_bias=bias,
+            pad_mode="pad",
+            padding=padding
         )
 
         if spectral_norm:
             self.conv = s_n(self.conv)
 
     def construct(self, input):
-        input =ops.pad(input,((0, 0), (self.padding, self.padding), (0, 0)))
         out = self.conv(input)
         return out
 
@@ -654,9 +661,9 @@ class MultiHeadAttention(nn.Cell):
         q = self.w_qs(x).view(sz_b, len_x, n_head, d_k)
         k = self.w_ks(x).view(sz_b, len_x, n_head, d_k)
         v = self.w_vs(x).view(sz_b, len_x, n_head, d_v)
-        q = q.permute(2, 0, 1, 3).contiguous().view(-1, len_x, d_k)  # (n*b) x lq x dk
-        k = k.permute(2, 0, 1, 3).contiguous().view(-1, len_x, d_k)  # (n*b) x lk x dk
-        v = v.permute(2, 0, 1, 3).contiguous().view(-1, len_x, d_v)  # (n*b) x lv x dv
+        q = q.permute(2, 0, 1, 3).view(-1, len_x, d_k)  # (n*b) x lq x dk
+        k = k.permute(2, 0, 1, 3).view(-1, len_x, d_k)  # (n*b) x lk x dk
+        v = v.permute(2, 0, 1, 3).view(-1, len_x, d_v)  # (n*b) x lv x dv
 
         if mask is not None:
             slf_mask = mask.repeat(n_head, 1, 1)  # (n*b) x .. x ..
@@ -666,7 +673,7 @@ class MultiHeadAttention(nn.Cell):
 
         output = output.view(n_head, sz_b, len_x, d_v)
         output = (
-            output.permute(1, 2, 0, 3).contiguous().view(sz_b, len_x, -1)
+            output.permute(1, 2, 0, 3).view(sz_b, len_x, -1)
         )  # b x lq x (n*dv)
 
         output = self.fc(output)
@@ -746,9 +753,9 @@ class MelStyleEncoder(nn.Cell):
         if mask is None:
             out = ops.mean(x, axis=1)
         else:
-            len_ = (~mask).sum(dim=1).unsqueeze(1)
+            len_ = (~mask).sum(axis=1).unsqueeze(1)
             x = x.masked_fill(mask.unsqueeze(-1), 0)
-            x = x.sum(dim=1)
+            x = x.sum(axis=1)
             out = ops.div(x, len_)
         return out
 
@@ -770,6 +777,7 @@ class MelStyleEncoder(nn.Cell):
         # self-attention
         if mask is not None:
             x = x.masked_fill(mask.unsqueeze(-1), 0)
+
         x, _ = self.slf_attn(x, mask=slf_attn_mask)
         # fc
         x = self.fc(x)

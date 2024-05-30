@@ -69,7 +69,7 @@ def top_k_top_p_filtering(
             # Keep at least min_tokens_to_keep (set to min_tokens_to_keep-1 because we add the first one below)
             sorted_indices_to_remove[..., :min_tokens_to_keep] = 0
         # Shift the indices to the right to keep also the first token above the threshold
-        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+        sorted_indices_to_remove[..., 1:] = ms.Tensor(sorted_indices_to_remove[..., :-1])
         sorted_indices_to_remove[..., 0] = 0
 
         # scatter sorted tensors to original indexing
@@ -127,7 +127,7 @@ def logits_to_probs(
         score = ops.where(
             score < 0, score * repetition_penalty, score / repetition_penalty
         )
-        logits.scatter_(dim=0, index=previous_tokens, src=score)
+        logits=logits.scatter(axis=0, index=previous_tokens, src=score)
 
     if top_p is not None and top_p < 1.0:
         sorted_logits, sorted_indices = ops.sort(logits, descending=True)
@@ -145,7 +145,10 @@ def logits_to_probs(
 
     if top_k is not None:
         v, _ = ops.topk(logits, min(top_k, logits.shape[-1]))
-        pivot = v.select(-1, -1).unsqueeze(-1)
+        dim_size = v.shape[-1]
+        index = ops.arange(dim_size-1, dim_size)
+
+        pivot = ops.index_select(v, -1, index).unsqueeze(-1)
         logits = ops.where(logits < pivot, -float("Inf"), logits)
 
     probs = ops.softmax(logits, axis=-1)

@@ -19,8 +19,8 @@ logging.getLogger("torchaudio._extension").setLevel(logging.ERROR)
 import pdb
 import mindspore as ms
 from mindspore import ops
+from mindspore.amp import auto_mixed_precision
 import mindnlp
-
 if os.path.exists("./gweight.txt"):
     with open("./gweight.txt", 'r', encoding="utf-8") as file:
         gweight_data = file.read()
@@ -55,6 +55,7 @@ if "_CUDA_VISIBLE_DEVICES" in os.environ:
 is_half = eval(os.environ.get("is_half", "True"))
 import gradio as gr
 from mindnlp.transformers import AutoModelForMaskedLM, AutoTokenizer
+from mindnlp.injection import set_global_fp16
 import numpy as np
 import librosa
 from feature_extractor import cnhubert
@@ -70,21 +71,22 @@ from module.mel_processing import spectrogram_torch
 from my_utils import load_audio
 from tools.i18n.i18n import I18nAuto
 
-i18n = I18nAuto()
+i18n = I18nAuto(language="zh_CN")
 
 # os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'  # 确保直接启动推理UI时也能够设置。
 
 
 tokenizer = AutoTokenizer.from_pretrained(bert_path)
-bert_model = AutoModelForMaskedLM.from_pretrained(bert_path)
+bert_model = AutoModelForMaskedLM.from_pretrained(bert_path).to_float(ms.float16)
 if is_half == True:
     bert_model = bert_model.half()
+    set_global_fp16(True)
 else:
     bert_model = bert_model
 
 
 def get_bert_feature(text, word2ph):
-    inputs = ops.stop_gradient(tokenizer(text, return_tensors="pt"))
+    inputs = ops.stop_gradient(tokenizer(text, return_tensors="ms"))
     for i in inputs:
         inputs[i] = inputs[i]
     res = bert_model(**inputs, output_hidden_states=True)
@@ -126,7 +128,7 @@ class DictToAttrRecursive(dict):
             raise AttributeError(f"Attribute {item} not found")
 
 
-ssl_model = cnhubert.get_model()
+ssl_model = cnhubert.get_model().to_float(ms.float16)
 if is_half == True:
     ssl_model = ssl_model.half()
 else:
@@ -144,7 +146,9 @@ def change_sovits_weights(sovits_path):
         hps.train.segment_size // hps.data.hop_length,
         n_speakers=hps.data.n_speakers,
         **hps.model
-    )
+    ).to_float(ms.float16)
+    vq_model.quantizer.vq.layers[0]._codebook.inited=True
+    vq_model.update_parameters_name()
     if ("pretrained" not in sovits_path):
         del vq_model.enc_q
     if is_half == True:
@@ -152,11 +156,8 @@ def change_sovits_weights(sovits_path):
     else:
         vq_model = vq_model
     vq_model.set_train(False)
-    parameters = [param.name for param in vq_model.get_parameters()]
     #vq_model.load_state_dict(dict_s2["weight"], strict=False)
-    param_not_load ,ckpt_not_load =ms.load_param_into_net(vq_model,dict_s2 )
-    for para in ckpt_not_load:
-        print(f'{para=}')
+    ms.load_param_into_net(vq_model,dict_s2 )
     with open("./sweight.txt", "w", encoding="utf-8") as f:
         f.write(sovits_path)
 
@@ -170,8 +171,12 @@ def change_gpt_weights(gpt_path):
     dict_s1 = ms.load_checkpoint(gpt_path, )
     config = json.loads(dict_s1["config"])
     max_sec = config["data"]["max_sec"]
-    t2s_model = Text2SemanticDecoder(config, top_k=3)
-    ms.load_param_into_net(t2s_model,dict_s1)
+    t2s_model = Text2SemanticDecoder(config, top_k=3).to_float(ms.float16)
+    parameters = [param.name for param in t2s_model.get_parameters()]
+    param_not_load ,ckpt_not_load =ms.load_param_into_net(t2s_model,dict_s1)
+    for para in ckpt_not_load:
+        print(f'{para=}') 
+
     #t2s_model.load_state_dict(dict_s1["weight"])
     if is_half == True:
         t2s_model = t2s_model.half()
@@ -346,7 +351,7 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
     wav16k = ops.cat([wav16k, zero_wav_torch])
     ssl_content = ssl_model.model(wav16k.unsqueeze(0))[
         "last_hidden_state"
-    ].transpose(
+    ].swapaxes(
         1, 2
     )  # .float()
     codes = vq_model.extract_latent(ssl_content)
@@ -393,7 +398,7 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
         prompt = prompt_semantic.unsqueeze(0)
         t2 = ttime()
         # pred_semantic = t2s_model.model.infer(
-        pred_semantic, idx = t2s_model.infer_panel(
+        pred_semantic, idx = t2s_model.infer(
             all_phoneme_ids,
             all_phoneme_len,
             None if ref_free else prompt,
@@ -409,7 +414,7 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
         pred_semantic = pred_semantic[:, -idx:].unsqueeze(
             0
         )  # .unsqueeze(0)#mq要多unsqueeze一次
-        refer = get_spepc(hps, ref_wav_path)  # 
+        refer = get_spepc(hps, ref_wav_path)   
         if is_half == True:
             refer = refer.half()
         else:
@@ -419,9 +424,7 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
             vq_model.decode(
                 pred_semantic, ms.Tensor(phones2).unsqueeze(0), refer
             )
-                .detach()
-                .cpu()
-                .numpy()[0, 0]
+                .asnumpy()[0, 0]
         )  ###试试重建不带上prompt部分
         max_audio=np.abs(audio).max()#简单防止16bit爆音
         if max_audio>1:audio/=max_audio
@@ -540,7 +543,7 @@ os.makedirs(GPT_weight_root, exist_ok=True)
 def get_weights_names():
     SoVITS_names = [pretrained_sovits_name]
     for name in os.listdir(SoVITS_weight_root):
-        if name.endswith(".pth"): SoVITS_names.append("%s/%s" % (SoVITS_weight_root, name))
+        if name.endswith(".ckpt"): SoVITS_names.append("%s/%s" % (SoVITS_weight_root, name))
     GPT_names = [pretrained_gpt_name]
     for name in os.listdir(GPT_weight_root):
         if name.endswith(".ckpt"): GPT_names.append("%s/%s" % (GPT_weight_root, name))

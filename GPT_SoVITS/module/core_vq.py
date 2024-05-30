@@ -60,8 +60,7 @@ def uniform_init(*shape: int):
 
 
 def sample_vectors(samples, num: int):
-    num_samples, device = samples.shape[0], samples.device
-
+    num_samples = samples.shape[0]
     if num_samples >= num:
         indices = ops.randperm(num_samples)[:num]
     else:
@@ -82,16 +81,19 @@ def kmeans(samples, num_clusters: int, num_iters: int = 10):
         samples_expanded = ops.expand_dims(samples, 1)
         means_expanded = ops.expand_dims(means, 0)
         diffs=samples_expanded-means_expanded
-        dists = -(diffs**2).sum(dim=-1)
+        dists = -(diffs**2).sum(axis=-1)
 
-        buckets = dists.max(axis=-1).indices
+        _ ,buckets = dists.max(axis=-1,return_indices=True)
+        buckets=ops.squeeze(buckets)
         bins = ops.bincount(buckets, minlength=num_clusters)
         zero_mask = bins == 0
         bins_min_clamped = bins.masked_fill(zero_mask, 1)
 
-        new_means = buckets.new_zeros(num_clusters, dim, dtype=dtype)
+        new_means = buckets.new_zeros((num_clusters, dim), dtype=dtype)
         #new_means.scatter_add_(0, repeat(buckets, "n -> n d", d=dim), samples)
-        new_means = ops.tensor_scatter_add(new_means, buckets.repeat(repeats=(1, dim)), samples) #可能有Bug
+        print(f"{buckets.repeat(dim,1).swapaxes(0,1).shape=}")
+        print(f"{new_means.shape=}")
+        new_means = ops.tensor_scatter_elements(new_means, buckets.repeat(dim,1).swapaxes(0,1), samples,axis=0) #可能有Bug
         new_means = new_means / bins_min_clamped[..., None]
 
         means = ops.where(zero_mask[..., None], means, new_means)
@@ -138,10 +140,10 @@ class EuclideanCodebook(nn.Cell):
         self.epsilon = epsilon
         self.threshold_ema_dead_code = threshold_ema_dead_code
 
-        self.inited = ms.Tensor([not kmeans_init])
-        self.cluster_size = ops.zeros(codebook_size)
-        self.embed = embed
-        self.embed_avg = ms.Tensor(embed)
+        self.inited =not kmeans_init
+        self.cluster_size = Parameter(ops.zeros(codebook_size),requires_grad=False)
+        self.embed = Parameter(embed,requires_grad=False)
+        self.embed_avg = Parameter(ms.Tensor(embed),requires_grad=False)
 
     def init_embed_(self, data):
         if self.inited:
@@ -151,7 +153,7 @@ class EuclideanCodebook(nn.Cell):
         ops.assign(self.embed, embed)
         ops.assign(self.embed_avg, embed.clone())
         ops.assign(self.cluster_size, cluster_size)
-        ops.assign(self.inited, ms.Tensor([True]))
+        self.inited=True
         # Make sure all buffers across workers are in sync after initialization
         # broadcast_tensors(self.buffers())
 
@@ -183,12 +185,13 @@ class EuclideanCodebook(nn.Cell):
 
     def quantize(self, x):
         embed = self.embed.t()
+        x=ops.squeeze(x)
         dist = -(
-            x.pow(2).sum(1, keepdim=True)
+            x.pow(2).sum(1, keepdims=True)
             - 2 * x @ embed
-            + embed.pow(2).sum(0, keepdim=True)
+            + embed.pow(2).sum(0, keepdims=True)
         )
-        embed_ind = dist.max(dim=-1).indices
+        _,embed_ind = dist.max(axis=-1,return_indices=True)
         return embed_ind
 
     def postprocess_emb(self, embed_ind, shape):
@@ -327,7 +330,7 @@ class VectorQuantization(nn.Cell):
         if self.training:
             quantize = ops.stop_gradient(x + (quantize - x))
 
-        loss = Parameter([0.0], requires_grads=self.training)
+        loss = Parameter([0.0], requires_grad=self.training)
 
         if self.training:
             if self.commitment_weight > 0:

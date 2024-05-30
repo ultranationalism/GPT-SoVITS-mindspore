@@ -77,7 +77,16 @@ class Text2SemanticDecoder(nn.Cell):
             num_layers=self.num_layers,
             norm=LayerNorm(self.model_dim) if norm_first else None,
         )
-
+        self.h.layers=nn.CellList([self.h.layers[0]])
+        for _ in range(23):
+            self.h.layers.append(TransformerEncoderLayer(
+                d_model=self.model_dim,
+                nhead=self.num_head,
+                dim_feedforward=self.model_dim * 4,
+                dropout=0.1,
+                batch_first=True,
+                norm_first=norm_first,
+            ))
         self.ar_predict_layer = nn.Dense(self.model_dim, self.vocab_size, has_bias=False)
         self.loss_fct = nn.CrossEntropyLoss(reduction="sum")
 
@@ -254,6 +263,7 @@ class Text2SemanticDecoder(nn.Cell):
         x_lens,
         prompts,
         bert_feature,
+        top_p=1.0,
         top_k: int = -100,
         early_stop_num: int = -1,
         temperature: float = 1.0,
@@ -266,9 +276,9 @@ class Text2SemanticDecoder(nn.Cell):
         y = prompts
         prefix_len = y.shape[1]
         x_len = x.shape[1]
-        x_attn_mask = ops.zeros((x_len, x_len), dtype=ops.bool_)
+        x_attn_mask = ops.zeros((x_len, x_len), dtype=ms.bool_)
         stop = False
-        for _ in tqdm(range(1500)):
+        for idx in tqdm(range(1500)):
             y_emb = self.ar_audio_embedding(y)
             y_pos = self.ar_audio_position(y_emb)
             # x 和逐渐增长的 y 一起输入给模型
@@ -286,13 +296,13 @@ class Text2SemanticDecoder(nn.Cell):
             )
             xy_attn_mask = ops.concat([x_attn_mask_pad, y_attn_mask], axis=0)
 
-            xy_dec, _ = self.h(
-                (xy_pos, None),
-                mask=xy_attn_mask,
+            xy_dec = self.h(
+                xy_pos,
+                src_mask=xy_attn_mask,
             )
             logits = self.ar_predict_layer(xy_dec[:, -1])
             samples = topk_sampling(
-                logits, top_k=top_k, top_p=1.0, temperature=temperature
+                logits, top_k=top_k, top_p=top_p, temperature=temperature
             )
 
             if early_stop_num != -1 and (y.shape[1] - prefix_len) > early_stop_num:
@@ -312,8 +322,8 @@ class Text2SemanticDecoder(nn.Cell):
             # print(samples.shape)#[1,1]#第一个1是bs
             # import os
             # os._exit(2333)
-            y = ops.concat([y, samples], axis=1)
-        return y
+            y = ops.concat([y, samples.to(ms.int32)], axis=1)
+        return y,idx-1
 
     def pad_y_eos(self, y, y_mask_int, eos_id):
         targets = ops.pad(y, (0, 1), value=0) + eos_id * ops.pad(
@@ -387,8 +397,7 @@ class Text2SemanticDecoder(nn.Cell):
         
 
         for idx in tqdm(range(1500)):
-            
-            xy_dec, _ = self.h((xy_pos, None), mask=xy_attn_mask, cache=cache)
+            xy_dec = self.h(xy_pos,src_mask=xy_attn_mask )
             logits = self.ar_predict_layer(
                 xy_dec[:, -1]
             )  ##不用改，如果用了cache的默认就是只有一帧，取最后一帧一样的
@@ -400,7 +409,7 @@ class Text2SemanticDecoder(nn.Cell):
             )[0].unsqueeze(0)
             # 本次生成的 semantic_ids 和之前的 y 构成新的 y
             # print(samples.shape)#[1,1]#第一个1是bs
-            y = ops.concat([y, samples], axis=1) 
+            y = ops.concat([y, samples.squeeze(2)], axis=1)
 
             if early_stop_num != -1 and (y.shape[1] - prefix_len) > early_stop_num:
                 print("use early stop num:", early_stop_num)
@@ -427,21 +436,23 @@ class Text2SemanticDecoder(nn.Cell):
                 )
                 cache["y_emb"] = y_emb
                 y_pos = self.ar_audio_position(y_emb)
-                xy_pos = y_pos[:, -1:]
+                xy_pos = ops.concat([xy_pos,y_pos[:, -1:]],axis=1) 
             else:
                 y_emb = self.ar_audio_embedding(y[:, -1:])
                 cache["y_emb"] = y_emb
                 y_pos = self.ar_audio_position(y_emb)
-                xy_pos = y_pos
+                xy_pos =ops.concat([xy_pos,y_pos],axis=1) 
             y_len = y_pos.shape[1]
 
             ###最右边一列（是错的）
             # xy_attn_mask=ops.ones((1, x_len+y_len), dtype=torch.bool,device=xy_pos.device)
             # xy_attn_mask[:,-1]=False
             ###最下面一行（是对的）
-            xy_attn_mask = ops.zeros(
-                (1, x_len + y_len), dtype=ms.bool_
-            )
+            new_mask = ops.zeros((y_len, y_len), dtype=ms.bool_)
+            new_mask = ops.triu(new_mask, diagonal=1)
+            xy_attn_mask = ops.pad(xy_attn_mask, (0, 1, 0, 1), value=False)
+            xy_attn_mask[-y_len:, -y_len:] = new_mask
+
         if ref_free:
             return y[:, :-1], 0
         return y[:, :-1], idx-1

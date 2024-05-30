@@ -208,7 +208,7 @@ class MultiHeadAttention(nn.Cell):
             value_relative_embeddings = self._get_relative_embeddings(self.emb_rel_v, t_s)
             output = output + self._matmul_with_relative_values(relative_weights, value_relative_embeddings)
         
-        output = (output.swapaxes(2, 3).contiguous().view(b, d, -1))
+        output = (output.swapaxes(2, 3).view(b, d, -1))
         return output, p_attn
 
     def _matmul_with_relative_values(self, x, y):

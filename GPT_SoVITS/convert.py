@@ -24,7 +24,7 @@ def convert_weight(safetensor, msname):
     config={}
     for dtype, cdict in model.items():
         cdict=hparams_to_dict(cdict)
-        if isinstance(cdict,collections.OrderedDict):
+        if dtype=="weight":
             for name,data in cdict.items():
                 if '.gamma' in name:
                     name = name.replace('.gamma', '.layer_norm.weight')
@@ -42,6 +42,47 @@ def convert_weight(safetensor, msname):
 
     ms.save_checkpoint(temp, msname,append_dict=config)
     print("convert Stable Diffusion checkpoint(torch) to MindOne Stable Diffusion checkpoint(mindspore) success!")
+# 映射表
+MAPPING = {
+    'dense1.weight': 'linear1.weight',
+    'dense1.bias': 'linear1.bias',
+    'dense2.weight': 'linear2.weight',
+    'dense2.bias': 'linear2.bias',
+    'norm1.gamma': 'norm1.weight',
+    'norm1.beta': 'norm1.bias',
+    'norm2.gamma': 'norm2.weight',
+    'norm2.beta': 'norm2.bias'
+}
+
+def convert_weight_ckpt(safetensor, msname):
+    model = torch.load(safetensor,map_location="cpu")
+    temp=[]
+    config={}
+    for dtype, cdict in model.items():
+        cdict=hparams_to_dict(cdict)
+        if isinstance(cdict,collections.OrderedDict):
+            for name,data in cdict.items():
+                if 'model.' in name:
+                    name = name.replace('model.', '')
+                # 检查名称是否需要替换
+                for new_name,old_name in MAPPING.items():
+                    if old_name in name:
+                        name = name.replace(old_name, new_name)
+                        break
+
+                data = Tensor(data.numpy())
+                # 将权重名称和形状作为键值对添加到列表中
+                temp.append({"name": name, "data": data})
+        elif isinstance(cdict,dict):
+            config[dtype]= json.dumps(cdict)
+        else:
+            print(f'{type(cdict)=}')
+            config[dtype]=cdict
+            continue
+
+    ms.save_checkpoint(temp, msname,append_dict=config)
+    print("convert Stable Diffusion checkpoint(torch) to MindOne Stable Diffusion checkpoint(mindspore) success!")
+
 
 def convert_weight_back(msname, pth):
     # 加载MindOne格式的权重文件
@@ -93,4 +134,4 @@ def convert_weight_back(msname, pth):
     # 打印转换成功的信息
     print("convert MindOne Stable Diffusion checkpoint(mindspore) to Stable Diffusion checkpoint(torch) success!")
 
-convert_weight("/root/GPT-SoVITS/GPT_SoVITS/pretrained_models/s2D488k.pth","/root/GPT-SoVITS/GPT_SoVITS/pretrained_models/s2D488k.ckpt")
+convert_weight("/root/GPT-SoVITS/GPT_weights/可莉_e25_s3025.pth","/root/GPT-SoVITS/GPT_weights/可莉_e25_s3025.ckpt")

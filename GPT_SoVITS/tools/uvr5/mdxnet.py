@@ -67,7 +67,7 @@ class ConvTDFNetTrim:
             [-1, 2, self.n_bins, self.dim_t]
         )
         x = x.permute([0, 2, 3, 1])
-        x = x.contiguous()
+        x = x
         x = torch.view_as_complex(x)
         x = torch.istft(
             x, n_fft=self.n_fft, hop_length=self.hop, window=self.window, center=True

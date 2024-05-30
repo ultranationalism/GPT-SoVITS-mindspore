@@ -271,8 +271,8 @@ class MultiHeadAttention(nn.Cell):
                     .tril(self.block_length)
                 )
                 scores = scores.masked_fill(block_mask == 0, -1e4)
-        p_attn = ops.softmax(scores, axis=-1)  # [b, n_h, t_t, t_s]
-        p_attn = self.drop(p=p_attn)
+        p_attn = ops.softmax(x=scores, axis=-1)  # [b, n_h, t_t, t_s]
+        p_attn = self.drop(p_attn)
         output = ops.matmul(p_attn, value)
         if self.window_size is not None:
             relative_weights = self._absolute_position_to_relative_position(p_attn)
@@ -330,18 +330,16 @@ class MultiHeadAttention(nn.Cell):
         """
         batch, heads, length, _ = x.shape
         # Concat columns of pad to shift from relative to absolute indexing.
-        x = ops.pad(x, commons.convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, 1]]))
-
+        x = ops.pad(x, remove_trailing_zeros(commons.convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, 1]])))
         # Concat extra elements so to add up to shape (len+1, 2*len-1).
-        x_flat = x.view([batch, heads, length * 2 * length])
+        x_flat = ms.Tensor(x.reshape([batch, heads, length * 2 * length])) #无法正常调用
         x_flat = ops.pad(
-            x_flat, commons.convert_pad_shape([[0, 0], [0, 0], [0, length - 1]])
+            x_flat, remove_trailing_zeros(commons.convert_pad_shape([[0, 0], [0, 0], [0, length - 1]]))
         )
-
         # Reshape and slice out the padded elements.
-        x_final = x_flat.view([batch, heads, length + 1, 2 * length - 1])[
+        x_final = ms.Tensor(x_flat.reshape([batch, heads, length + 1, 2 * length - 1])[
             :, :, :length, length - 1 :
-        ]
+        ])
         return x_final
 
     def _absolute_position_to_relative_position(self, x):
@@ -352,12 +350,12 @@ class MultiHeadAttention(nn.Cell):
         batch, heads, length, _ = x.shape
         # padd along column
         x = ops.pad(
-            x, commons.convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, length - 1]])
+            x, remove_trailing_zeros(commons.convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, length - 1]]))
         )
-        x_flat = x.view([batch, heads, length**2 + length * (length - 1)])
+        x_flat = x.reshape([batch, heads, length**2 + length * (length - 1)])
         # add 0's in the beginning that will skew the elements after reshape
-        x_flat = ops.pad(x_flat, commons.convert_pad_shape([[0, 0], [0, 0], [length, 0]]))
-        x_final = x_flat.view([batch, heads, length, 2 * length])[:, :, :, 1:]
+        x_flat = ops.pad(x_flat, remove_trailing_zeros(commons.convert_pad_shape([[0, 0], [0, 0], [length, 0]])))
+        x_final = x_flat.reshape([batch, heads, length, 2 * length])[:, :, :, 1:]
         return x_final
 
     def _attention_bias_proximal(self, length):
@@ -394,21 +392,31 @@ class FFN(nn.Cell):
 
         if causal:
             self.padding = self._causal_padding
+            self.conv_1 = nn.Conv1d(in_channels, filter_channels, kernel_size,pad_mode="valid")
+            self.conv_2 = nn.Conv1d(filter_channels, out_channels, kernel_size,pad_mode="valid")
         else:
             self.padding = self._same_padding
-
-        self.conv_1 = nn.Conv1d(in_channels, filter_channels, kernel_size)
-        self.conv_2 = nn.Conv1d(filter_channels, out_channels, kernel_size)
+            self.conv_1 = nn.Conv1d(in_channels, filter_channels, kernel_size)
+            self.conv_2 = nn.Conv1d(filter_channels, out_channels, kernel_size)
         self.drop = nn.Dropout(p=p_dropout)
 
     def construct(self, x, x_mask):
-        x = self.conv_1(self.padding(x * x_mask))
-        if self.activation == "gelu":
-            x = x * ops.sigmoid(1.702 * x)
+        if self.causal:
+            x = self.conv_1(self.padding(x * x_mask))
+            if self.activation == "gelu":
+                x = x * ops.sigmoid(1.702 * x)
+            else:
+                x = ops.relu(x)
+            x = self.drop(x)
+            x = self.conv_2(self.padding(x * x_mask))
         else:
-            x = ops.relu(x)
-        x = self.drop(x)
-        x = self.conv_2(self.padding(x * x_mask))
+            x = self.conv_1(x * x_mask)
+            if self.activation == "gelu":
+                x = x * ops.sigmoid(1.702 * x)
+            else:
+                x = ops.relu(x)
+            x = self.drop(x)
+            x = self.conv_2(x * x_mask)
         return x * x_mask
 
     def _causal_padding(self, x):
@@ -692,3 +700,10 @@ class TransformerCouplingLayer(nn.Cell):
             x1 = (x1 - m) * ops.exp(-logs) * x_mask
             x = ops.cat([x0, x1], 1)
             return x
+
+def remove_trailing_zeros(lst):
+    while lst and lst[-1] == 0:
+        lst.pop()  # 移除列表末尾的元素
+    if len(lst)%2==1:
+        lst.append(0)
+    return lst

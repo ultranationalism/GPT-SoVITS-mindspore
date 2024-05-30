@@ -39,10 +39,10 @@ hann_window = {}
 
 
 def spectrogram_torch(y, n_fft, sampling_rate, hop_size, win_size, center=False):
-    if ops.min(y) < -1.0:
-        print("min value is ", ops.min(y))
-    if ops.max(y) > 1.0:
-        print("max value is ", ops.max(y))
+    if ops.min(y)[0] < -1.0:
+        print("min value is ", ops.min(y)[0])
+    if ops.max(y)[0] > 1.0:
+        print("max value is ", ops.max(y)[0])
 
     y = ops.pad(
         y.unsqueeze(1),

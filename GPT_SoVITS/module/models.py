@@ -423,7 +423,6 @@ class Generator(nn.Cell):
 
         self.ups = nn.CellList()
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
-            self.padd=nn.Pad(((0, 0), ((k - u) // 2, (k - u) // 2), (0, 0)))
             self.ups.append(
                 weight_norm(
                     ConvTranspose1d(
@@ -431,34 +430,37 @@ class Generator(nn.Cell):
                         upsample_initial_channel // (2 ** (i + 1)),
                         k,
                         u,
-                    ),
+                        pad_mode="pad",
+                        padding=3
+                        ),
                     dim=0
                 )
             )
 
-        self.resblocks = nn.CellList()
+        self.resblocks = []
         for i in range(len(self.ups)):
             ch = upsample_initial_channel // (2 ** (i + 1))
             for j, (k, d) in enumerate(
                 zip(resblock_kernel_sizes, resblock_dilation_sizes)
             ):
-                self.resblocks.append(resblock(ch, k, d))
+                tmp=resblock(ch, k, d)
+                self.resblocks.append(tmp)
+        self.resblocks = nn.CellList(self.resblocks)
 
-        self.conv_post = Conv1d(ch, 1, 7, 1, has_bias=False)
+
+        self.conv_post = Conv1d(ch, 1, 7, 1, has_bias=False,pad_mode="pad",padding=3)
         self.ups.apply(init_weights)
 
         if gin_channels != 0:
             self.cond = nn.Conv1d(gin_channels, upsample_initial_channel, 1)
 
     def construct(self, x, g=None):
-        x=ops.pad(x,((0, 0), (3, 3), (0, 0)))
         x = self.conv_pre(x)
         if g is not None:
             x = x + self.cond(g)
 
         for i in range(self.num_upsamples):
             x = ops.leaky_relu(x, modules.LRELU_SLOPE)
-            x=self.padd(x)
             x = self.ups[i](x)
             xs = None
             for j in range(self.num_kernels):
@@ -468,7 +470,6 @@ class Generator(nn.Cell):
                     xs += self.resblocks[i * self.num_kernels + j](x)
             x = xs / self.num_kernels
         x = ops.leaky_relu(x)
-        x=ops.pad(x,((0, 0), (3, 3), (0, 0)))
         x = self.conv_post(x)
         x = ops.tanh(x)
 
@@ -664,7 +665,7 @@ class ReferenceEncoder(nn.Cell):
         out = out.swapaxes(1, 2)  # [N, Ty//2^K, 128, n_mels//2^K]
         T = out.shape[1]
         N = out.shape[0]
-        out = out.contiguous().view(N, T, -1)  # [N, Ty//2^K, 128*n_mels//2^K]
+        out = out.view(N, T, -1)  # [N, Ty//2^K, 128*n_mels//2^K]
 
         self.gru.flatten_parameters()
         memory, out = self.gru(out)  # out --- [1, N, 128]
@@ -912,8 +913,10 @@ class SynthesizerTrn(nn.Cell):
             y.dtype
         )
         ge = self.ref_enc(y * y_mask, y_mask)
+        
 
         with autocast(enabled=False):
+            
             if self.freeze_quantizer:
                 self.ssl_proj.eval()
                 self.quantizer.eval()
@@ -921,6 +924,7 @@ class SynthesizerTrn(nn.Cell):
             quantized, codes, commit_loss, quantized_list = self.quantizer(
                 ssl, layers=[0]
             )
+        
 
         if self.semantic_frame_rate == "25hz":
             quantized = ops.interpolate(
@@ -972,22 +976,23 @@ class SynthesizerTrn(nn.Cell):
 
     def decode(self, codes, text, refer, noise_scale=0.5):
         ge = None
+        
         if refer is not None:
             refer_lengths = ops.stop_gradient(ms.Tensor([refer.shape[2]]))
             refer_mask = ops.stop_gradient(ops.unsqueeze(
                 commons.sequence_mask(refer_lengths, refer.shape[2]), 1
             ).to(refer.dtype))
-            ge = ops.stop_gradient(self.ref_enc(refer * refer_mask, refer_mask))
-
+            ge = self.ref_enc(refer * refer_mask, refer_mask)#这段发生了死锁
+        
         y_lengths = ops.stop_gradient(ms.Tensor([codes.shape[2] * 2]))
         text_lengths = ops.stop_gradient(ms.Tensor([text.shape[-1]]))
-
+        
         quantized = ops.stop_gradient(self.quantizer.decode(codes))
         if self.semantic_frame_rate == "25hz":
             quantized = ops.stop_gradient(ops.interpolate(
                 quantized, size=int(quantized.shape[-1] * 2), mode="nearest"
             ))
-
+        
         x, m_p, logs_p, y_mask = ops.stop_gradient(self.enc_p(
             quantized, y_lengths, text, text_lengths, ge
         ))
