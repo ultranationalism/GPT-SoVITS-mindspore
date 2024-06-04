@@ -1,16 +1,15 @@
-from torch.nn.functional import *
-from torch.nn.functional import (
-    _mha_shape_check,
-    _canonical_mask,
-    _none_or_dtype,
-    _in_projection_packed,
-)
-from torch.nn import functional as F
-import torch
+from __future__ import absolute_import
+
+import mindspore.common.dtype as mstype
+from mindspore.common.tensor import Tensor
+
+
+from mindspore import ops,nn,Tensor
+import mindspore as ms
 # Tensor = ms.Tensor
-# from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, List, Optional, Tuple, Union
 
-
+"""
 def multi_head_attention_forward_patched(
     query: Tensor,
     key: Tensor,
@@ -39,7 +38,7 @@ def multi_head_attention_forward_patched(
     is_causal: bool = False,
     cache=None,
 ) -> Tuple[Tensor, Optional[Tensor]]:
-    r"""
+    r""""""
     Args:
         query, key, value: map a query and a set of key-value pairs to an output.
             See "Attention Is All You Need" for more details.
@@ -112,7 +111,7 @@ def multi_head_attention_forward_patched(
           :math:`(N, L, S)`, where :math:`N` is the batch size, :math:`L` is the target sequence length, and
           :math:`S` is the source sequence length. If ``average_attn_weights=False``, returns attention weights per
           head of shape :math:`(num_heads, L, S)` when input is unbatched or :math:`(N, num_heads, L, S)`.
-    """
+    """"""
     tens_ops = (
         query,
         key,
@@ -463,3 +462,201 @@ def multi_head_attention_forward_patched(
             # squeeze the output if input was unbatched
             attn_output = attn_output.squeeze(1)
         return attn_output, None
+"""
+from mindspore.ops.function.nn_func import _check_qkv_shape,_check_kpm_shape,_check_attn_mask_shape,_in_projection_packed,_in_projection,_inner_pad,linear,_scaled_dot_product_attention
+
+def multi_head_attention_forward_patched(query, key, value, embed_dim_to_check, num_heads, in_proj_weight,
+                                 in_proj_bias, bias_k, bias_v, add_zero_attn, dropout_p, out_proj_weight,
+                                 out_proj_bias, training=True, key_padding_mask=None, attn_mask=None,
+                                 use_separate_proj_weight=False, q_proj_weight=None, k_proj_weight=None,
+                                 v_proj_weight=None, static_k=None, static_v=None, average_attn_weights=True,
+                                 is_causal=False, k_is_v=False, q_is_k=False, dtype=mstype.float32,cache=None):
+    """multi head attetion forward function"""
+    is_batched = _check_qkv_shape(query.ndim, key.ndim, value.ndim)
+    if key_padding_mask is not None:
+        _check_kpm_shape(query.ndim, key_padding_mask.ndim)
+    if attn_mask is not None:
+        _check_attn_mask_shape(query.ndim, query.shape, key.shape, attn_mask.ndim,
+                               attn_mask.shape, num_heads)
+
+    if not is_batched:
+        query = query.expand_dims(1)
+        key = key.expand_dims(1)
+        value = value.expand_dims(1)
+        if key_padding_mask is not None:
+            key_padding_mask = key_padding_mask.expand_dims(0)
+
+    tgt_len, bsz, embed_dim = query.shape
+    src_len, _, _ = key.shape
+    if key_padding_mask is not None:
+        _kpm_dtype = key_padding_mask.dtype
+        if _kpm_dtype != mstype.bool_ and not ops.is_floating_point(key_padding_mask):
+            raise ValueError("The `key_padding_mask` only supports bool and floating dtypes.")
+    if embed_dim != embed_dim_to_check:
+        raise ValueError(f"The `embed_dim` should be {embed_dim_to_check}, but got {embed_dim}.")
+
+    head_dim = embed_dim // num_heads
+    if head_dim * num_heads != embed_dim:
+        raise ValueError(f"The `embed_dim` {embed_dim} can not be divisible by `num_heads` {num_heads}.")
+    if use_separate_proj_weight:
+        # allow MHA to have different embedding dims when separate projection weights are used
+        if key.shape[:2] != value.shape[:2]:
+            raise ValueError(f"The sequence length and batch dims of `key`: {key.shape[:2]} do not match "
+                             f"`value`: {value.shape[:2]}.")
+    else:
+        if key.shape != value.shape:
+            raise ValueError(f"The shape of `key` {key.shape} does not match `value` {value.shape}.")
+
+    # compute in-projection
+    if not use_separate_proj_weight:
+        if in_proj_weight is None:
+            raise ValueError("`use_separate_proj_weight` is ``False`` but `in_proj_weight` got ``None``.")
+        q, k, v = _in_projection_packed(query, key, value, in_proj_weight, in_proj_bias, k_is_v, q_is_k)
+    else:
+        if q_proj_weight is None:
+            raise ValueError("`use_separate_proj_weight` is ``True`` but `q_proj_weight` got ``None``.")
+        if k_proj_weight is None:
+            raise ValueError("`use_separate_proj_weight` is ``True`` but `k_proj_weight` got ``None``.")
+        if v_proj_weight is None:
+            raise ValueError("`use_separate_proj_weight` is ``True`` but `v_proj_weight` got ``None``.")
+        if in_proj_bias is None:
+            b_q = b_k = b_v = None
+        else:
+            b_q, b_k, b_v = in_proj_bias.tensor_split(3)
+        q, k, v = _in_projection(query, key, value, q_proj_weight, k_proj_weight, v_proj_weight, b_q, b_k, b_v)
+    if cache != None:
+        if cache["first_infer"] == 1:
+            cache["k"][cache["stage"]] = k
+            # print(0,cache["k"].shape)
+            cache["v"][cache["stage"]] = v
+        else:  ###12个layer每个都要留自己的cache_kv
+            # print(1,cache["k"].shape)
+            cache["k"][cache["stage"]] = ops.cat(
+                [cache["k"][cache["stage"]], k], 0
+            )  ##本来时序是1，但是proj的时候可能transpose了所以时序到0维了
+            cache["v"][cache["stage"]] = ops.cat([cache["v"][cache["stage"]], v], 0)
+            # print(2, cache["k"].shape)
+            src_len = cache["k"][cache["stage"]].shape[0]
+            k = cache["k"][cache["stage"]]
+            v = cache["v"][cache["stage"]]
+            # if attn_mask is not None:
+            #     attn_mask=attn_mask[-1:,]
+            # print(attn_mask.shape,attn_mask)
+        cache["stage"] = (cache["stage"] + 1) % cache["all_stage"]
+
+    # prep attention mask
+    if attn_mask is not None:
+        if attn_mask.dtype == mstype.uint8:
+            attn_mask = attn_mask.astype(mstype.bool_)
+        else:
+            if not ops.is_floating_point(attn_mask) and attn_mask.dtype != mstype.bool_:
+                raise ValueError(f"`attn_mask` only support float, byte, and bool types, "
+                                 f"but got not {attn_mask.dtype}.")
+        # ensure attn_mask's ndim is 3
+        if attn_mask.ndim == 2:
+            correct_2d_size = (tgt_len, src_len)
+            if attn_mask.shape != correct_2d_size:
+                raise ValueError(f"The shape of the `attn_mask` should be {correct_2d_size}, "
+                                 f"but got {attn_mask.shape}.")
+            attn_mask = attn_mask.expand_dims(0)
+        elif attn_mask.ndim == 3:
+            correct_3d_size = (bsz * num_heads, tgt_len, src_len)
+            if attn_mask.shape != correct_3d_size:
+                raise ValueError(f"The shape of the `attn_mask` should be {correct_3d_size}, "
+                                 f"but got {attn_mask.shape}.")
+        else:
+            raise ValueError(f"The ndim of `attn_mask` only support 2 or 3, "
+                             f"but got {attn_mask.ndim}.")
+
+    if bias_k is not None and bias_v is not None:
+        if static_k is not None:
+            raise ValueError("The bias_k cannot be added to static_k.")
+        if static_v is not None:
+            raise ValueError("The bias_v cannot be added to static_v.")
+        k = ops.cat([k, bias_k.tile((1, bsz, 1))])
+        v = ops.cat([v, bias_v.tile((1, bsz, 1))])
+        if attn_mask is not None:
+            attn_mask = _inner_pad(attn_mask, (0, 1))
+        if key_padding_mask is not None:
+            key_padding_mask = _inner_pad(key_padding_mask, (0, 1))
+    else:
+        if bias_k is not None or bias_v is not None:
+            raise ValueError("The bias_k and bias_v should be ``None``"
+                             "at the same time.")
+
+    q = q.view((tgt_len, bsz * num_heads, head_dim)).swapaxes(0, 1)
+    if static_k is None:
+        k = k.view((k.shape[0], bsz * num_heads, head_dim)).swapaxes(0, 1)
+    else:
+        if static_k.shape[0] != bsz * num_heads:
+            raise ValueError(f"The shape[0] of `static_k` should be {bsz * num_heads}, "
+                             f"but got {static_k.shape[0]}")
+        if static_k.shape[2] != head_dim:
+            raise ValueError(f"The shape[2] of `static_k` should be {head_dim}, "
+                             f"but got {static_k.shape[2]}")
+        k = static_k
+    if static_v is None:
+        v = v.view((v.shape[0], bsz * num_heads, head_dim)).swapaxes(0, 1)
+    else:
+        if static_v.shape[0] != bsz * num_heads:
+            raise ValueError(f"The shape[0] of `static_v` should be {bsz * num_heads}, "
+                             f"but got {static_v.shape[0]}")
+        if static_v.shape[2] != head_dim:
+            raise ValueError(f"The shape[2] of `static_v` should be {head_dim}, "
+                             f"but got {static_v.shape[2]}")
+        v = static_v
+
+    if add_zero_attn:
+        zero_attn_shape = (bsz * num_heads, 1, head_dim)
+        k = ops.cat([k, ops.zeros(zero_attn_shape, dtype=k.dtype)], axis=1)
+        v = ops.cat([v, ops.zeros(zero_attn_shape, dtype=v.dtype)], axis=1)
+        if attn_mask is not None:
+            attn_mask = _inner_pad(attn_mask, (0, 1))
+        if key_padding_mask is not None:
+            key_padding_mask = _inner_pad(key_padding_mask, (0, 1))
+
+    src_len = k.shape[1]
+
+    if key_padding_mask is not None:
+        if key_padding_mask.shape != (bsz, src_len):
+            raise ValueError(f"The shape of `key_padding_mask` should be {(bsz, src_len)}, "
+                             f"but got {key_padding_mask.shape}.")
+
+        key_padding_mask = key_padding_mask.view((bsz, 1, 1, src_len)). \
+            tile((1, num_heads, 1, 1)).reshape(bsz * num_heads, 1, src_len)
+        if attn_mask is None:
+            attn_mask = key_padding_mask
+        elif attn_mask.dtype == mstype.bool_:
+            attn_mask = attn_mask.logical_or(key_padding_mask)
+        else:
+            attn_mask = attn_mask + key_padding_mask
+
+    if attn_mask is not None and attn_mask.dtype == mstype.bool_:
+        new_attn_mask = ops.zeros_like(attn_mask, dtype=q.dtype)
+        attn_mask = new_attn_mask.masked_fill(attn_mask, ops.cast(float("-inf"), new_attn_mask.dtype))
+
+    if attn_mask is not None:
+        if attn_mask.shape[0] == 1:
+            attn_mask = attn_mask.expand_dims(0)
+        else:
+            attn_mask = attn_mask.view((bsz, num_heads, -1, src_len))
+
+    q = q.view((bsz, num_heads, tgt_len, head_dim))
+    k = k.view((bsz, num_heads, src_len, head_dim))
+    v = v.view((bsz, num_heads, src_len, head_dim))
+
+    attn_output, attn_output_weights = _scaled_dot_product_attention(
+        q, k, v, attn_mask, dropout_p, is_causal, training, dtype)
+    attn_output = attn_output.transpose(2, 0, 1, 3).view((bsz * tgt_len, embed_dim))
+
+    attn_output = linear(attn_output, out_proj_weight, out_proj_bias)
+    attn_output = attn_output.view((tgt_len, bsz, attn_output.shape[1]))
+
+    attn_output_weights = attn_output_weights.view((bsz, num_heads, tgt_len, src_len))
+    if average_attn_weights:
+        attn_output_weights = attn_output_weights.sum(axis=1) / num_heads
+
+    if not is_batched:
+        attn_output = attn_output.squeeze(1)
+        attn_output_weights = attn_output_weights.squeeze(0)
+    return attn_output, attn_output_weights

@@ -1,5 +1,6 @@
 # modified from https://github.com/lifeiteng/vall-e/blob/main/valle/modules/transformer.py
 import copy
+import math
 import numbers
 from functools import partial
 from typing import Any
@@ -10,12 +11,14 @@ from typing import Tuple
 from typing import Union
 
 import mindspore as ms
-from mindspore.nn import MultiheadAttention
+from AR.modules.activation import MultiheadAttention
 from AR.modules.scaling import BalancedDoubleSwish
 from mindspore import nn,Tensor,ops,Parameter
 from mindspore.common.initializer import initializer,One,Zero
+from mindspore.common.initializer import initializer, XavierNormal, XavierUniform, \
+    HeUniform, Uniform, _calculate_fan_in_and_fan_out
 
-_shape_t = Union[int, List[int], ms.Tensor.shape]
+_shape_t = Union[int, List[int]]
 
 
 class LayerNorm(nn.Cell):
@@ -179,7 +182,6 @@ class TransformerEncoder(nn.Cell):
 
         return output
 
-
 class TransformerEncoderLayer(nn.Cell):
     __constants__ = ["batch_first", "norm_first"]
 
@@ -189,20 +191,20 @@ class TransformerEncoderLayer(nn.Cell):
         nhead: int,
         dim_feedforward: int = 2048,
         dropout: float = 0.1,
-        activation: Union[str, Callable[[Tensor], Tensor]] = F.relu,
+        activation: Union[str, Callable[[Tensor], Tensor]] = ops.relu,
         batch_first: bool = False,
         norm_first: bool = False,
         device=None,
-        dtype=None,
+        dtype=ms.float32,
         linear1_self_attention_cls: nn.Cell = nn.Dense,
         linear2_self_attention_cls: nn.Cell = nn.Dense,
         linear1_feedforward_cls: nn.Cell = nn.Dense,
         linear2_feedforward_cls: nn.Cell = nn.Dense,
-        layer_norm_cls: nn.Cell = LayerNorm,
+        layer_norm_cls: nn.Cell = nn.LayerNorm,
         layer_norm_eps: float = 1e-5,
         adaptive_layer_norm=False,
     ) -> None:
-        factory_kwargs = {"device": device, "dtype": dtype}
+        factory_kwargs = {"dtype": dtype}
         super(TransformerEncoderLayer, self).__init__()
         # print(233333333333,d_model,nhead)
         # import os
@@ -212,19 +214,18 @@ class TransformerEncoderLayer(nn.Cell):
             nhead,
             dropout=dropout,
             batch_first=batch_first,
-            linear1_cls=linear1_self_attention_cls,
-            linear2_cls=linear2_self_attention_cls,
             **factory_kwargs,
         )
 
         # Implementation of Feedforward model
-        self.linear1 = linear1_feedforward_cls(
-            d_model, dim_feedforward, **factory_kwargs
-        )
+        fan_in, _ = _calculate_fan_in_and_fan_out((dim_feedforward, d_model))
+        bound = 1 / math.sqrt(fan_in)
+        self.dense1 = nn.Dense(d_model, dim_feedforward, dtype=dtype)
         self.dropout = nn.Dropout(dropout)
-        self.linear2 = linear2_feedforward_cls(
-            dim_feedforward, d_model, **factory_kwargs
-        )
+        fan_in1, _ = _calculate_fan_in_and_fan_out((d_model, dim_feedforward))
+        bound1 = 1 / math.sqrt(fan_in1)
+        self.dense2 = nn.Dense(dim_feedforward, d_model, dtype=dtype)
+
 
         self.norm_first = norm_first
         self.dropout1 = nn.Dropout(dropout)
@@ -250,7 +251,7 @@ class TransformerEncoderLayer(nn.Cell):
 
         norm1 = layer_norm_cls(d_model, eps=layer_norm_eps, **factory_kwargs)
         if layer_norm_cls == IdentityNorm:
-            norm2 = BalancedBasicNorm(d_model, eps=layer_norm_eps, **factory_kwargs)
+            norm2 = layer_norm_cls(d_model, eps=layer_norm_eps, **factory_kwargs)
         else:
             norm2 = layer_norm_cls(d_model, eps=layer_norm_eps, **factory_kwargs)
 
@@ -264,7 +265,7 @@ class TransformerEncoderLayer(nn.Cell):
     def __setstate__(self, state):
         super(TransformerEncoderLayer, self).__setstate__(state)
         if not hasattr(self, "activation"):
-            self.activation = F.relu
+            self.activation = ops.relu
 
     def construct(
         self,
@@ -291,13 +292,12 @@ class TransformerEncoderLayer(nn.Cell):
 
         if src_key_padding_mask is not None:
             _skpm_dtype = src_key_padding_mask.dtype
-            if _skpm_dtype != torch.bool and not torch.is_floating_point(
+            if _skpm_dtype != ms.bool_ and not ops.is_floating_point(
                 src_key_padding_mask
             ):
                 raise AssertionError(
                     "only bool and floating types of key_padding_mask are supported"
                 )
-
         if self.norm_first:
             x = x + self._sa_block(
                 self.norm1(x, stage_embedding),
@@ -307,11 +307,8 @@ class TransformerEncoderLayer(nn.Cell):
             )
             x = x + self._ff_block(self.norm2(x, stage_embedding))
         else:
-            x = self.norm1(
-                x + self._sa_block(x, src_mask, src_key_padding_mask, cache=cache),
-                stage_embedding,
-            )
-            x = self.norm2(x + self._ff_block(x), stage_embedding)
+            x = self.norm1(x + self._sa_block(x, src_mask, src_key_padding_mask,cache=cache))
+            x = self.norm2(x + self._ff_block(x))
 
         if is_src_tuple:
             return (x, stage_embedding)
@@ -342,7 +339,7 @@ class TransformerEncoderLayer(nn.Cell):
 
     # feed forward block
     def _ff_block(self, x: Tensor) -> Tensor:
-        x = self.linear2(self.dropout(self.activation(self.linear1(x))))
+        x = self.dense2(self.dropout(self.activation(self.dense1(x))))
         return self.dropout2(x)
 
 
@@ -359,20 +356,28 @@ class AdaptiveLayerNorm(nn.Cell):
     def construct(self, input: Tensor, embedding: Tensor = None) -> Tensor:
         if isinstance(input, tuple):
             input, embedding = input
-            weight, bias = torch.split(
+            weight, bias = ops.split(
                 self.project_layer(embedding),
                 split_size_or_sections=self.d_model,
-                dim=-1,
+                axis =-1,
             )
             return (weight * self.norm(input) + bias, embedding)
 
-        weight, bias = torch.split(
+        weight, bias = ops.split(
             self.project_layer(embedding),
             split_size_or_sections=self.d_model,
-            dim=-1,
+            axis =-1,
         )
         return weight * self.norm(input) + bias
 
 
 def _get_clones(module, N):
     return nn.CellList([copy.deepcopy(module) for i in range(N)])
+
+def _get_activation_fn(activation: str):
+    if activation == "relu":
+        return ops.relu
+    if activation == "gelu":
+        return ops.gelu
+
+    raise ValueError(f"The activation must be relu/gelu, but get {activation}")

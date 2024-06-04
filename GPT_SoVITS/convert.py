@@ -48,10 +48,6 @@ MAPPING = {
     'dense1.bias': 'linear1.bias',
     'dense2.weight': 'linear2.weight',
     'dense2.bias': 'linear2.bias',
-    'norm1.gamma': 'norm1.weight',
-    'norm1.beta': 'norm1.bias',
-    'norm2.gamma': 'norm2.weight',
-    'norm2.beta': 'norm2.bias'
 }
 
 def convert_weight_ckpt(safetensor, msname):
@@ -134,4 +130,4 @@ def convert_weight_back(msname, pth):
     # 打印转换成功的信息
     print("convert MindOne Stable Diffusion checkpoint(mindspore) to Stable Diffusion checkpoint(torch) success!")
 
-convert_weight("/root/GPT-SoVITS/GPT_weights/可莉_e25_s3025.pth","/root/GPT-SoVITS/GPT_weights/可莉_e25_s3025.ckpt")
+convert_weight_ckpt("/root/GPT-SoVITS/GPT_weights/可莉-e10.ckpt","/root/GPT-SoVITS/GPT_weights/可莉-e10-ms.ckpt")

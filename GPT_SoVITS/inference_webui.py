@@ -398,7 +398,7 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
         prompt = prompt_semantic.unsqueeze(0)
         t2 = ttime()
         # pred_semantic = t2s_model.model.infer(
-        pred_semantic, idx = t2s_model.infer(
+        pred_semantic, idx = t2s_model.infer_panel(
             all_phoneme_ids,
             all_phoneme_len,
             None if ref_free else prompt,

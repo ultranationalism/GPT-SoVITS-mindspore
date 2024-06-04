@@ -15,10 +15,11 @@ from AR.models.utils import (
 )
 from AR.modules.embedding import SinePositionalEmbedding
 from AR.modules.embedding import TokenEmbedding
+import time
 import mindspore as ms
 from mindspore.nn import LayerNorm
-from mindspore.nn import TransformerEncoder
-from mindspore.nn import TransformerEncoderLayer
+from AR.modules.transformer import TransformerEncoder
+from AR.modules.transformer import TransformerEncoderLayer
 from mindspore import nn,ops,Parameter
 #from torchmetrics.classification import MulticlassAccuracy
 
@@ -77,16 +78,7 @@ class Text2SemanticDecoder(nn.Cell):
             num_layers=self.num_layers,
             norm=LayerNorm(self.model_dim) if norm_first else None,
         )
-        self.h.layers=nn.CellList([self.h.layers[0]])
-        for _ in range(23):
-            self.h.layers.append(TransformerEncoderLayer(
-                d_model=self.model_dim,
-                nhead=self.num_head,
-                dim_feedforward=self.model_dim * 4,
-                dropout=0.1,
-                batch_first=True,
-                norm_first=norm_first,
-            ))
+
         self.ar_predict_layer = nn.Dense(self.model_dim, self.vocab_size, has_bias=False)
         self.loss_fct = nn.CrossEntropyLoss(reduction="sum")
 
@@ -397,7 +389,10 @@ class Text2SemanticDecoder(nn.Cell):
         
 
         for idx in tqdm(range(1500)):
-            xy_dec = self.h(xy_pos,src_mask=xy_attn_mask )
+            start=time.time()
+            xy_dec, _ = self.h((xy_pos, None), mask=xy_attn_mask, cache=cache)
+            end=time.time()
+            print(f"{start-end=}")
             logits = self.ar_predict_layer(
                 xy_dec[:, -1]
             )  ##不用改，如果用了cache的默认就是只有一帧，取最后一帧一样的
@@ -436,23 +431,23 @@ class Text2SemanticDecoder(nn.Cell):
                 )
                 cache["y_emb"] = y_emb
                 y_pos = self.ar_audio_position(y_emb)
-                xy_pos = ops.concat([xy_pos,y_pos[:, -1:]],axis=1) 
+                xy_pos = y_pos[:, -1:]
             else:
                 y_emb = self.ar_audio_embedding(y[:, -1:])
                 cache["y_emb"] = y_emb
                 y_pos = self.ar_audio_position(y_emb)
-                xy_pos =ops.concat([xy_pos,y_pos],axis=1) 
+                xy_pos = y_pos
             y_len = y_pos.shape[1]
 
             ###最右边一列（是错的）
             # xy_attn_mask=ops.ones((1, x_len+y_len), dtype=torch.bool,device=xy_pos.device)
             # xy_attn_mask[:,-1]=False
             ###最下面一行（是对的）
-            new_mask = ops.zeros((y_len, y_len), dtype=ms.bool_)
-            new_mask = ops.triu(new_mask, diagonal=1)
-            xy_attn_mask = ops.pad(xy_attn_mask, (0, 1, 0, 1), value=False)
-            xy_attn_mask[-y_len:, -y_len:] = new_mask
+            xy_attn_mask = ops.zeros(
+                (1, x_len + y_len), dtype=ms.bool_
+            )
 
         if ref_free:
             return y[:, :-1], 0
         return y[:, :-1], idx-1
+
