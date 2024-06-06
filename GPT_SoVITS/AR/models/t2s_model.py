@@ -389,10 +389,7 @@ class Text2SemanticDecoder(nn.Cell):
         
 
         for idx in tqdm(range(1500)):
-            start=time.time()
             xy_dec, _ = self.h((xy_pos, None), mask=xy_attn_mask, cache=cache)
-            end=time.time()
-            print(f"{start-end=}")
             logits = self.ar_predict_layer(
                 xy_dec[:, -1]
             )  ##不用改，如果用了cache的默认就是只有一帧，取最后一帧一样的
