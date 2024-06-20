@@ -21,36 +21,13 @@ A Powerful Few-shot Voice Conversion and Text-to-Speech WebUI.<br><br>
 
 3. **Cross-lingual Support:** Inference in languages different from the training dataset, currently supporting English, Japanese, and Chinese.
 
-4. **WebUI Tools:** Integrated tools include voice accompaniment separation, automatic training set segmentation, Chinese ASR, and text labeling, assisting beginners in creating training datasets and GPT/SoVITS models.
-
-**Check out our [demo video](https://www.bilibili.com/video/BV12g4y1m7Uw) here!**
-
-Unseen speakers few-shot fine-tuning demo:
-
-https://github.com/RVC-Boss/GPT-SoVITS/assets/129054828/05bee1fa-bdd8-4d85-9350-80c060ab47fb
-
-**User guide: [简体中文](https://www.yuque.com/baicaigongchang1145haoyuangong/ib3g1e) | [English](https://rentry.co/GPT-SoVITS-guide#/)**
+4. **WebUI Tools(TODO):** Integrated tools include automatic training set segmentation, Chinese ASR, and text labeling, assisting beginners in creating training datasets and GPT/SoVITS models.
 
 ## Installation
 
-For users in China region, you can [click here](https://www.codewithgpu.com/i/RVC-Boss/GPT-SoVITS/GPT-SoVITS-Official) to use AutoDL Cloud Docker to experience the full functionality online.
-
 ### Tested Environments
 
-- Python 3.9, PyTorch 2.0.1, CUDA 11
-- Python 3.10.13, PyTorch 2.1.2, CUDA 12.3
-- Python 3.9, PyTorch 2.2.2, macOS 14.4.1 (Apple silicon)
-- Python 3.9, PyTorch 2.2.2, CPU devices
-
-_Note: numba==0.56.4 requires py<3.11_
-
-### Windows
-
-If you are a Windows user (tested with win>=10), you can directly download the [pre-packaged distribution](https://huggingface.co/lj1995/GPT-SoVITS-windows-package/resolve/main/GPT-SoVITS-beta.7z?download=true) and double-click on _go-webui.bat_ to start GPT-SoVITS-WebUI.
-
-Users in China region can download [the 0217 package](https://www.icloud.com.cn/iclouddrive/061bfkcVJcBfsMfLF5R2XKdTQ#GPT-SoVITS-beta0217) or [the 0306fix2 package](https://www.icloud.com.cn/iclouddrive/09aaTLf96aa92dbLe0fPNM5CQ#GPT-SoVITS-beta0306fix2) by clicking the links and then selecting "Download a copy."
-
-_Note: The 0306fix2 version doubles the inference speed and fixes all issues with the no reference text mode._
+- Python 3.9, Mindspore 2.2.3, CU116
 
 ### Linux
 
