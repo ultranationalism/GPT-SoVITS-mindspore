@@ -58,10 +58,13 @@ conda install -c conda-forge 'ffmpeg<7'
 
 ## Pretrained Models
 
-You can utilize the model conversion tool `GPT_SoVITS/convert.py` to transform PyTorch model weights into MindSpore model weights.
+You can use the model conversion tool `GPT_SoVITS/convert.py` to transform PyTorch model weights into MindSpore model weights.
 
 Download pretrained models from [GPT-SoVITS Models](https://huggingface.co/lj1995/GPT-SoVITS) and place them in `GPT_SoVITS/pretrained_models`.
 
 Users in China region can download these two models by entering the links below and clicking "Download a copy"
 
 - [GPT-SoVITS Models](https://www.icloud.com.cn/iclouddrive/056y_Xog_HXpALuVUjscIwTtg#GPT-SoVITS_Models)
+
+## Start Inference
+
