@@ -3,10 +3,6 @@
 <h1>GPT-SoVITS-WebUI</h1>
 A Powerful Few-shot Voice Conversion and Text-to-Speech WebUI.<br><br>
 
-[![madewithlove](https://img.shields.io/badge/made_with-%E2%9D%A4-red?style=for-the-badge&labelColor=orange)](https://github.com/RVC-Boss/GPT-SoVITS)
-
-<img src="https://counter.seku.su/cmoe?name=gptsovits&theme=r34" /><br>
-
 [**English**](./README.md) | [**中文简体**](./docs/cn/README.md)
 
 </div>
@@ -61,6 +57,8 @@ conda install -c conda-forge 'ffmpeg<7'
 ```
 
 ## Pretrained Models
+
+You can utilize the model conversion tool `GPT_SoVITS/convert.py` to transform PyTorch model weights into MindSpore model weights.
 
 Download pretrained models from [GPT-SoVITS Models](https://huggingface.co/lj1995/GPT-SoVITS) and place them in `GPT_SoVITS/pretrained_models`.
 
