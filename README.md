@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>GPT-SoVITS-WebUI</h1>
+<h1>GPT-SoVITS-MindSpore-WebUI</h1>
 A Powerful Few-shot Voice Conversion and Text-to-Speech WebUI.<br><br>
 
 [**English**](./README.md) | [**中文简体**](./docs/cn/README.md)
@@ -8,6 +8,8 @@ A Powerful Few-shot Voice Conversion and Text-to-Speech WebUI.<br><br>
 </div>
 
 ---
+
+This repo is the implementation of the GPT-SoVITS model in [MindSpore](https://www.mindspore.cn/), reference to the implementation by [RVC-BOSS](github.com/RVC-Boss/GPT-SoVITS)
 
 ## Features:
 
@@ -61,6 +63,12 @@ conda install -c conda-forge 'ffmpeg<7'
 
 You can use the model conversion tool `GPT_SoVITS/convert.py` to transform PyTorch model weights into MindSpore model weights.
 
+```
+cd GPT-SoVITS-mindspore
+python GPT_SoVITS/convert.py --g_path path_to_your_GPT_model \
+--s_path path_to_your_Sovits_model \
+```
+
 Download pretrained models from [GPT-SoVITS Models](https://huggingface.co/lj1995/GPT-SoVITS) and place them in `GPT_SoVITS/pretrained_models`.
 
 Users in China region can download these two models by entering the links below and clicking "Download a copy"
@@ -68,3 +76,29 @@ Users in China region can download these two models by entering the links below 
 - [GPT-SoVITS Models](https://www.icloud.com.cn/iclouddrive/056y_Xog_HXpALuVUjscIwTtg#GPT-SoVITS_Models)
 
 ## Start Inference
+
+### Launch Webui
+
+You can use a startup script：
+
+```
+cd GPT-SoVITS-mindspore
+bash launch_webui.sh
+```
+
+Or directly launch the Python file:
+
+```
+cd GPT-SoVITS-mindspore
+python GPT_SoVITS/inference_webui.py
+```
+
+### Reference information
+
+Upload a clip for reference audio (**must be 3-10 seconds**) then fill in the **Text for reference audio**, which is basically what does the character say in the audio. Choose the language on the right.
+
+The reference audio is very important as it determines the speed and the emotion of the output. Please try different ones if you did not get your desired output.
+
+### Inference
+
+Fill the **inference text** and set the **inference language**, then click **Start inference**.
