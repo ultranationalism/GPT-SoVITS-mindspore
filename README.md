@@ -32,6 +32,7 @@ conda create -n GPTSoVits python=3.9
 conda activate GPTSoVits
 bash install.sh
 ```
+
 ### Install Manually
 
 #### Install Dependences
@@ -67,4 +68,3 @@ Users in China region can download these two models by entering the links below 
 - [GPT-SoVITS Models](https://www.icloud.com.cn/iclouddrive/056y_Xog_HXpALuVUjscIwTtg#GPT-SoVITS_Models)
 
 ## Start Inference
-
