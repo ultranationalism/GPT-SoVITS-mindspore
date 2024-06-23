@@ -89,12 +89,16 @@ args.g_path ="/root/GPT-SoVITS/GPT_weights/可莉-e10.ckpt" #tmp
 args.s_path="/root/GPT-SoVITS/SoVITS_weights/可莉_e25_s3025.pth"
 
 if args.s_path is not None:
+    if not os.path.exists('SoVITS_weights'):
+        os.makedirs('SoVITS_weights')
     s_filename = os.path.basename(args.s_path)
     convert_sovits_weight(args.s_path, os.path.join('SoVITS_weights', s_filename.replace('.pth', '-ms.ckpt')))
 else:
     print("Skip SoVITS model conversion")
 
 if args.g_path is not None:
+    if not os.path.exists('GPT_weights'):
+        os.makedirs('GPT_weights')
     g_filename = os.path.basename(args.g_path)
     convert_gpt_weight(args.g_path, os.path.join('GPT_weights', g_filename.replace('.ckpt', '-ms.ckpt')))
 else:
