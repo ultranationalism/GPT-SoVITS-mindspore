@@ -172,11 +172,11 @@ def change_gpt_weights(gpt_path):
     config = json.loads(dict_s1["config"])
     max_sec = config["data"]["max_sec"]
     t2s_model = Text2SemanticDecoder(config, top_k=3).to_float(ms.float16)
-    parameters = [param.name for param in t2s_model.get_parameters()]
     param_not_load ,ckpt_not_load =ms.load_param_into_net(t2s_model,dict_s1)
+    """    
     for para in ckpt_not_load:
         print(f'{para=}') 
-
+    """
     #t2s_model.load_state_dict(dict_s1["weight"])
     if is_half == True:
         t2s_model = t2s_model.half()
