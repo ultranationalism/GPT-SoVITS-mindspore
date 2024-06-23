@@ -9,7 +9,7 @@ A Powerful Few-shot Voice Conversion and Text-to-Speech WebUI.<br><br>
 
 ---
 
-This repo is the implementation of the GPT-SoVITS model in [MindSpore](https://www.mindspore.cn/), reference to the implementation by [RVC-BOSS](github.com/RVC-Boss/GPT-SoVITS)
+This repo is the implementation of the GPT-SoVITS model in [MindSpore](https://www.mindspore.cn/), reference to the implementation by [RVC-BOSS](https://github.com/RVC-Boss/GPT-SoVITS)
 
 ## Features:
 

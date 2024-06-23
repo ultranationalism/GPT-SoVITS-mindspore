@@ -9,7 +9,7 @@
 
 ---
 
-这个仓库为GPT-SoVITS模型的[MindSpore](https://www.mindspore.cn/)实现，参考[RVC-BOSS](github.com/RVC-Boss/GPT-SoVITS)原仓库的实现
+这个仓库为GPT-SoVITS模型的[MindSpore](https://www.mindspore.cn/)实现，参考[RVC-BOSS](https://github.com/RVC-Boss/GPT-SoVITS)原仓库的实现
 
 ## 功能：
 
