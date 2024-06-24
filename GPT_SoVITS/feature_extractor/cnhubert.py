@@ -13,7 +13,7 @@ from mindnlp.transformers import (
     HubertModel,
 )
 
-import utils
+#import utils
 
 cnhubert_base_path = None
 
@@ -91,7 +91,7 @@ def get_content(hmodel, wav_16k_tensor):
     feats = ops.stop_gradient(hmodel(wav_16k_tensor))
     return feats.swapaxes(1, 2)
 
-
+"""
 if __name__ == "__main__":
     model = get_model()
     src_path = "/Users/Shared/原音频2.wav"
@@ -100,3 +100,4 @@ if __name__ == "__main__":
     wav_16k_tensor = wav_16k_tensor
     feats = get_content(model, wav_16k_tensor)
     print(feats.shape)
+"""
