@@ -85,9 +85,6 @@ def convert_gpt_weight(gpt_weight, msname):
     ms.save_checkpoint(temp, msname,append_dict=config)
     print(f"convert GPT(torch):{gpt_weight} to GPT(mindspore):{msname} success!")
 
-args.g_path ="/root/GPT-SoVITS/GPT_weights/可莉-e10.ckpt" #tmp
-args.s_path="/root/GPT-SoVITS/SoVITS_weights/可莉_e25_s3025.pth"
-
 if args.s_path is not None:
     if not os.path.exists('SoVITS_weights'):
         os.makedirs('SoVITS_weights')
