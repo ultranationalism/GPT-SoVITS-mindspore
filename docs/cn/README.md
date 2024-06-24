@@ -73,6 +73,8 @@ python GPT_SoVITS/convert.py --g_path path_to_your_GPT_model \
 
 从 [GPT-SoVITS Models](https://huggingface.co/lj1995/GPT-SoVITS) 下载预训练模型，并将它们放置在 `GPT_SoVITS\pretrained_models` 中。
 
+你需要使用`GPT_SoVITS/convert.py` 转换其中的`s1bert25hz-2kh-longer-epoch=68e-step=50232.ckpt` and `s2G488k.pth` 为mindspore的模型，
+
 中国地区用户可以进入以下链接并点击“下载副本”下载以上两个模型：
 
 - [GPT-SoVITS Models](https://www.icloud.com.cn/iclouddrive/056y_Xog_HXpALuVUjscIwTtg#GPT-SoVITS_Models)
