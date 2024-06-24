@@ -22,4 +22,7 @@ LangSegment>=0.2.0
 wordsegment
 mindspore
 mindnlp
-mindaudio
+git+https://github.com/mindspore-lab/mindaudio.git@main
+wget
+mir_eval
+Levenshtein
