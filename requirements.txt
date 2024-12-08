@@ -20,8 +20,8 @@ jieba_fast
 jieba
 LangSegment>=0.2.0
 wordsegment
-mindspore
-mindnlp
+mindspore==2.3.1
+mindnlp==0.3.0
 git+https://github.com/mindspore-lab/mindaudio.git@main
 wget
 mir_eval
